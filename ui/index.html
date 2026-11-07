@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>知识悬浮搜索</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="card">
+    <div class="titlebar" data-tauri-drag-region>
+      <span class="logo" data-tauri-drag-region>📚</span>
+      <span class="app-name" data-tauri-drag-region>知识悬浮搜索</span>
+      <div class="tb-actions">
+        <button id="btn-settings" class="tb-btn" title="设置">⚙</button>
+        <button id="btn-hide" class="tb-btn" title="隐藏到托盘">—</button>
+      </div>
+    </div>
+
+    <div class="searchbar">
+      <span class="s-icon">🔍</span>
+      <input id="q" type="text" placeholder="搜索知识库…" autocomplete="off" spellcheck="false" />
+      <button id="btn-clear" class="clear-btn" hidden title="清空">✕</button>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty" id="empty-state">输入关键词，检索你的本地知识库</div>
+    </div>
+
+    <div class="settings" id="settings" hidden>
+      <div class="set-row">
+        <span class="lbl">知识库目录</span>
+        <span id="cfg-dir" class="dir">未设置</span>
+      </div>
+      <div class="set-btns">
+        <button id="btn-pick">📁 选择文件夹…</button>
+        <button id="btn-rescan">🔄 重新扫描</button>
+        <button id="btn-quit" class="danger">⏻ 退出应用</button>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span id="stats">就绪</span>
+      <span id="hint">Enter 打开 · Ctrl+Enter 定位 · Esc 清空</span>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

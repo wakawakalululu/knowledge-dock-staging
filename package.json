@@ -1,0 +1,14 @@
+{
+  "name": "knowledge-dock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "uTools 风格的本地知识库悬浮检索工具 (Tauri 2)",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

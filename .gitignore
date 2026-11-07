@@ -1,0 +1,9 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+# 图标由 scripts/gen-icon.mjs + tauri icon 在构建时生成，不入库（二进制）
+src-tauri/icons/
+scripts/app-icon.png
+dist/
+*.log
+.DS_Store
