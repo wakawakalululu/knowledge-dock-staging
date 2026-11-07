@@ -65,7 +65,8 @@ html, body {
   padding: 0 8px 0 14px;
   flex: none;
 }
-.logo { font-size: 15px; }
+.logo { display: flex; align-items: center; }
+.logo svg { width: 16px; height: 16px; color: var(--accent); }
 .app-name {
   flex: 1;
   font-size: 12.5px;
@@ -78,9 +79,12 @@ html, body {
   border: none; border-radius: 7px;
   background: transparent;
   color: var(--text-dim);
-  font-size: 13px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
+.tb-btn svg { width: 14px; height: 14px; display: block; }
 .tb-btn:hover { background: var(--hover); color: var(--text); }
 
 /* ---- 搜索栏 ---- */
@@ -97,7 +101,8 @@ html, body {
   border-radius: 10px;
 }
 .searchbar:focus-within { border-color: var(--accent); }
-.s-icon { font-size: 14px; opacity: 0.75; }
+.s-icon { display: flex; align-items: center; }
+.s-icon svg { width: 15px; height: 15px; opacity: 0.75; }
 #q {
   flex: 1;
   height: 100%;
@@ -115,9 +120,13 @@ html, body {
   border-radius: 50%;
   background: var(--btn-bg);
   color: var(--text-dim);
-  font-size: 10px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
 }
+.clear-btn svg { width: 10px; height: 10px; display: block; }
 .clear-btn:hover { background: var(--btn-bg-hover); color: var(--text); }
 
 /* ---- 结果列表 ---- */
@@ -218,7 +227,12 @@ html, body {
   font-size: 12.5px;
   cursor: pointer;
   font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
+.set-btns button svg { width: 13px; height: 13px; flex: none; }
 .set-btns button:hover { background: var(--btn-bg-hover); }
 .set-btns .danger:hover { background: rgba(229, 72, 77, 0.15); color: var(--danger); }
 

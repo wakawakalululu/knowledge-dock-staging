@@ -196,7 +196,7 @@ listen("index-updated", (ev) => {
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个片段`;
   } catch (e) {
     if (String(e).includes("尚未设置")) {
-      $stats.textContent = "请先在 ⚙ 设置中选择知识库文件夹";
+      $stats.textContent = "请先在「设置」中选择知识库文件夹";
       $settings.hidden = false;
     } else {
       console.error(e);
