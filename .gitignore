@@ -7,3 +7,4 @@ scripts/app-icon.png
 dist/
 *.log
 .DS_Store
+err*.txt
