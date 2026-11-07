@@ -205,15 +205,11 @@ impl Index {
         let mut best: HashMap<usize, (i32, usize)> = HashMap::new();
         for (ci, ch) in self.chunks.iter().enumerate() {
             let mut score = 0i32;
-            let mut first_pos: Option<usize> = None;
             let mut all = true;
             for t in &terms {
                 match Self::count_at(&ch.lower, t, 3) {
-                    Some((count, pos)) => {
+                    Some((count, _pos)) => {
                         score += 10 * count;
-                        if first_pos.map_or(true, |p| pos < p) {
-                            first_pos = Some(pos);
-                        }
                     }
                     None => {
                         all = false;

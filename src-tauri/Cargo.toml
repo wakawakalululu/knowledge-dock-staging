@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "uTools 风格的本地知识库悬浮检索工具"
 edition = "2021"
 
+[lib]
+name = "knowledge_dock_lib"
+crate-type = ["rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
