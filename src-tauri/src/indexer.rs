@@ -1,35 +1,72 @@
-//! 知识库索引与检索：扫描目录 → 按空行分块 → 内存全文打分检索
+//! 差异化切块：把非结构化文本解析为"带上下文层级的结构化知识单元"
 //!
-//! 中文无需分词：子串匹配 + 空格多词全含计分，个人知识库量级下
-//! 每次按键的全量内存扫描在 10ms 以内。
+//! - 法规类：`第X条` 正则切分，遍历时跟踪 编/章/节 层级，面包屑直达答案
+//! - Markdown：标题树（pulldown-cmark，正确处理代码围栏）作为块边界
+//! - 问答类：`问:/答:`（或 `Q:/A:`）成对识别
+//! - 兜底：纯文本按空行分段
+//!
+//! 检索与打分在 engine.rs（Tantivy BM25 + jieba 分词）。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 use walkdir::WalkDir;
 
 const EXTS: [&str; 3] = ["md", "markdown", "txt"];
-/// 跳过的目录名（隐藏目录一律跳过）
 const IGNORE_DIRS: [&str; 6] = [
     "node_modules", "target", "dist", "__pycache__", ".git", ".obsidian",
 ];
-/// 单文件上限，超过则截断（防止超大日志文件拖慢索引）
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Hit {
-    /// 展示用相对路径
-    pub path: String,
+/// 法规条文行：第X条（可选前置空白）
+static RE_ARTICLE: OnceLock<regex::Regex> = OnceLock::new();
+/// 法规层级行：第X编/章/节（允许 Markdown 标记前缀，标题文本随后）
+static RE_CHAPTER: OnceLock<regex::Regex> = OnceLock::new();
+/// 问答行：问：/Q: 等
+static RE_Q: OnceLock<regex::Regex> = OnceLock::new();
+/// 问答行：答：/A: 等
+static RE_A: OnceLock<regex::Regex> = OnceLock::new();
+
+fn re_article() -> &'static regex::Regex {
+    RE_ARTICLE.get_or_init(|| {
+        regex::Regex::new(r"^\s*第[一二三四五六七八九十百千万零两]+条").unwrap()
+    })
+}
+fn re_chapter() -> &'static regex::Regex {
+    RE_CHAPTER.get_or_init(|| {
+        regex::Regex::new(r"^\s*(?:#+\s*)?(第[一二三四五六七八九十百千万零两]+[章节编]\s*[^\n]*)$").unwrap()
+    })
+}
+fn re_q() -> &'static regex::Regex {
+    RE_Q.get_or_init(|| regex::Regex::new(r"^\s*(?:问|Q)[:：.]\s*(.*)$").unwrap())
+}
+fn re_a() -> &'static regex::Regex {
+    RE_A.get_or_init(|| regex::Regex::new(r"^\s*(?:答|A)[:：.]\s*(.*)$").unwrap())
+}
+
+pub const TYPE_LAW: &str = "Law";
+pub const TYPE_MANUAL: &str = "Manual";
+pub const TYPE_QA: &str = "QA";
+pub const TYPE_NOTE: &str = "Note";
+
+/// 统一知识单元：三种格式收敛到同一结构
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentChunk {
+    /// "Law" | "Manual" | "QA" | "Note"
+    pub doc_type: String,
+    /// 面包屑导航，如 ["劳动法", "第四章 工作时间和休息休假", "第四十四条"]
+    pub breadcrumbs: Vec<String>,
     /// 文档标题（首个 `# ` 标题，否则文件名）
     pub title: String,
-    /// 命中片段（由前端做高亮）
-    pub snippet: String,
-    /// 片段起始行号（1-based）
-    pub line: usize,
-    #[serde(skip_serializing)]
-    pub score: i32,
-    /// 打开文件用的绝对路径
+    /// 展示用相对路径
+    pub path: String,
+    /// 绝对路径（打开/上下文展开用）
     pub abs: String,
+    /// 实际内容（条文、题干+解析等）
+    pub text: String,
+    /// 块起始行号（1-based）
+    pub line: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,30 +75,10 @@ pub struct Stats {
     pub chunks: usize,
 }
 
-struct Doc {
-    path: String,
-    title: String,
-    abs: String,
-}
-
-struct Chunk {
-    doc: usize,
-    line: usize,
-    lower: String,
-    /// 命中片段的字符偏移（lower 中的字节偏移，另存文本原文做片段裁剪）
-    text: String,
-}
-
-pub struct Index {
-    docs: Vec<Doc>,
-    chunks: Vec<Chunk>,
-}
-
 fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || IGNORE_DIRS.contains(&name)
 }
 
-/// 取首个 `# ` 标题作为文档标题
 fn extract_title(content: &str, fallback: &str) -> String {
     for line in content.lines().take(30) {
         let t = line.trim();
@@ -75,209 +92,383 @@ fn extract_title(content: &str, fallback: &str) -> String {
     fallback.to_string()
 }
 
-fn push_chunk(chunks: &mut Vec<Chunk>, doc: usize, line: usize, buf: &mut String) {
-    if buf.trim().is_empty() {
-        buf.clear();
-        return;
+/// 问答对数量，>=2 视为题库/FAQ 文档
+fn count_qa_pairs(content: &str) -> usize {
+    let mut in_q = false;
+    let mut pairs = 0;
+    for line in content.lines() {
+        if re_q().is_match(line) {
+            if !in_q {
+                pairs += 1;
+            }
+            in_q = true;
+        } else if in_q && (line.trim().is_empty() || re_a().is_match(line)) {
+            if line.trim().is_empty() {
+                in_q = false;
+            }
+        }
     }
-    let text = std::mem::take(buf);
-    let lower = text.to_lowercase();
-    chunks.push(Chunk { doc, line, text, lower });
+    pairs
 }
 
-impl Index {
-    pub fn empty() -> Self {
-        Index { docs: Vec::new(), chunks: Vec::new() }
+/// 是否法规文档：条文标记足够密集
+fn is_law(content: &str) -> bool {
+    content.lines().filter(|l| re_article().is_match(l)).count() >= 2
+}
+
+pub fn scan_folder(root: &Path) -> Result<Vec<DocumentChunk>, String> {
+    if !root.is_dir() {
+        return Err(format!("目录不存在: {}", root.display()));
+    }
+    let mut all = Vec::new();
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || !is_ignored_dir(&e.file_name().to_string_lossy()))
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let ext = entry
+            .path()
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase());
+        if !matches!(ext.as_deref(), Some(x) if EXTS.contains(&x)) {
+            continue;
+        }
+        if entry.metadata().map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true) {
+            continue;
+        }
+        let raw = match std::fs::read(entry.path()) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let content = String::from_utf8_lossy(&raw).into_owned();
+        let stem = entry
+            .path()
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let title = extract_title(&content, &stem);
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(entry.path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        let abs = entry.path().to_string_lossy().to_string();
+
+        let chunks = if is_law(&content) {
+            chunk_law(&content, &title, &rel, &abs)
+        } else if count_qa_pairs(&content) >= 2 {
+            chunk_qa(&content, &title, &rel, &abs)
+        } else if rel.to_lowercase().ends_with(".md") || rel.to_lowercase().ends_with(".markdown") {
+            chunk_markdown(&content, &title, &rel, &abs)
+        } else {
+            chunk_plain(&content, &title, &rel, &abs)
+        };
+        all.extend(chunks);
+    }
+    Ok(all)
+}
+
+/// push 前统一修整：去首尾空行、压缩行尾空白
+fn finalize(buf: &mut String) -> Option<String> {
+    let text = buf.trim().to_string();
+    buf.clear();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text)
+}
+
+/// 法规：按"条"切分，跟踪 编/章/节；面包屑 = [文档标题, ..., "第X条"]
+fn chunk_law(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
+    let mut out = Vec::new();
+    let mut stack: Vec<String> = Vec::new(); // 编/章/节 栈
+    let mut buf = String::new();
+    let mut start_line = 1usize;
+    let mut cur_article: Option<String> = None;
+    let mut ln = 1usize;
+
+    for line in content.lines() {
+        let t = line.trim_end();
+        if let Some(c) = re_chapter().captures(t) {
+            // 层级行：先收掉当前条
+            if let Some(text) = finalize(&mut buf) {
+                let mut bc: Vec<String> = vec![title.to_string()];
+                bc.extend(stack.iter().cloned());
+                if let Some(a) = &cur_article {
+                    bc.push(a.clone());
+                }
+                out.push(chunk(TYPE_LAW, bc, title, rel, abs, text, start_line));
+            }
+            cur_article = None;
+            let label = c[1].trim().to_string();
+            // 同级或上级：弹出；下级：压栈（编>章>节 顺序）
+            let level = |s: &str| match s.chars().find(|c| "编章节".contains(*c)) {
+                Some('编') => 0,
+                Some('章') => 1,
+                _ => 2,
+            };
+            let lv = level(&label);
+            stack.retain(|s| level(s) < lv);
+            stack.push(label);
+            ln += 1;
+            continue;
+        }
+        if re_article().is_match(t) {
+            // 新条：先收上一条
+            if let Some(text) = finalize(&mut buf) {
+                let mut bc: Vec<String> = vec![title.to_string()];
+                bc.extend(stack.iter().cloned());
+                if let Some(a) = &cur_article {
+                    bc.push(a.clone());
+                }
+                out.push(chunk(TYPE_LAW, bc, title, rel, abs, text, start_line));
+            }
+            // 提取条号（如"第四十四条"）
+            let m = re_article().find(t).unwrap();
+            let article = m.as_str().trim().to_string();
+            cur_article = Some(article);
+            start_line = ln;
+            buf.push_str(t);
+            buf.push('\n');
+            ln += 1;
+            continue;
+        }
+        if !buf.is_empty() || !t.trim().is_empty() {
+            if buf.is_empty() {
+                start_line = ln;
+            }
+            buf.push_str(t);
+            buf.push('\n');
+        }
+        ln += 1;
+    }
+    if let Some(text) = finalize(&mut buf) {
+        let mut bc: Vec<String> = vec![title.to_string()];
+        bc.extend(stack.iter().cloned());
+        if let Some(a) = &cur_article {
+            bc.push(a.clone());
+        }
+        out.push(chunk(TYPE_LAW, bc, title, rel, abs, text, start_line));
+    }
+    // 法规文件的普通前言（如目录说明）也保留
+    out
+}
+
+/// 问答：问/答成对切块，面包屑 = [文档标题, "问N: 题干前 24 字"]
+fn chunk_qa(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut start_line = 1usize;
+    let mut qno = 0usize;
+    let mut qtext = String::new();
+    let mut ln = 1usize;
+
+    let flush = |buf: &mut String, out: &mut Vec<DocumentChunk>, start: usize, no: usize, q: &str| {
+        if let Some(text) = finalize(buf) {
+            let head: String = q.chars().take(24).collect();
+            let label = if head.is_empty() { format!("问{no}") } else { format!("问{no}: {head}") };
+            out.push(chunk(
+                TYPE_QA,
+                vec![title.to_string(), label],
+                title,
+                rel,
+                abs,
+                text,
+                start,
+            ));
+        }
+    };
+
+    for line in content.lines() {
+        let t = line.trim_end();
+        if let Some(c) = re_q().captures(t) {
+            flush(&mut buf, &mut out, start_line, qno, &qtext);
+            qno += 1;
+            qtext = c[1].trim().to_string();
+            start_line = ln;
+            buf.push_str(t);
+            buf.push('\n');
+        } else if !t.trim().is_empty() || (!buf.is_empty() && !re_a().is_match(t)) {
+            if buf.is_empty() {
+                start_line = ln;
+            }
+            buf.push_str(t);
+            buf.push('\n');
+        }
+        ln += 1;
+    }
+    flush(&mut buf, &mut out, start_line, qno, &qtext);
+    out
+}
+
+/// Markdown：标题树切块（pulldown-cmark，正确处理代码围栏/表格）
+fn chunk_markdown(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+    // 行首字节偏移表：byte -> line
+    let mut line_starts = vec![0usize];
+    for (i, b) in content.bytes().enumerate() {
+        if b == b'\n' {
+            line_starts.push(i + 1);
+        }
     }
 
-    pub fn build(root: &Path) -> Result<Index, String> {
-        if !root.is_dir() {
-            return Err(format!("目录不存在: {}", root.display()));
-        }
-        let mut docs = Vec::new();
-        let mut chunks: Vec<Chunk> = Vec::new();
+    let mut out = Vec::new();
+    let mut stack: Vec<(usize, String)> = Vec::new(); // (level, 标题文本)
+    let mut buf = String::new();
+    let mut sec_start_byte = 0usize;
+    let mut in_heading = false;
 
-        for entry in WalkDir::new(root)
-            .into_iter()
-            .filter_entry(|e| e.depth() == 0 || !is_ignored_dir(&e.file_name().to_string_lossy()))
-            .filter_map(|e| e.ok())
-        {
-            if !entry.file_type().is_file() {
-                continue;
+    for (ev, range) in Parser::new_ext(content, Options::ENABLE_TABLES).into_offset_iter() {
+        match ev {
+            Event::Start(Tag::Heading { level, .. }) => {
+                flush_md(&mut buf, &mut out, &stack, title, rel, abs, sec_start_byte, &line_starts);
+                // 弹出到父级并压入当前标题
+                stack.retain(|(l, _)| *l < level as usize);
+                stack.push((level as usize, String::new()));
+                in_heading = true;
             }
-            let ext = entry
-                .path()
-                .extension()
-                .map(|e| e.to_string_lossy().to_lowercase());
-            if !matches!(ext.as_deref(), Some(x) if EXTS.contains(&x)) {
-                continue;
+            Event::End(TagEnd::Heading(_)) => {
+                in_heading = false;
+                // H1 与文档标题相同则不重复进入面包屑
+                if let Some(last) = stack.last() {
+                    if last.0 == 1 && last.1 == title {
+                        stack.pop();
+                    }
+                }
+                sec_start_byte = range.end;
             }
-            if entry.metadata().map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true) {
-                continue;
-            }
-            // 以 UTF-8 容错读取（GBK 老文档可能乱码，按损失读取不中断索引）
-            let raw = match std::fs::read(entry.path()) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let content = String::from_utf8_lossy(&raw);
-
-            let stem = entry
-                .path()
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let title = extract_title(&content, &stem);
-            let rel = entry
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace('\\', "/");
-            let abs = entry.path().to_string_lossy().to_string();
-            let doc = docs.len();
-            docs.push(Doc { path: rel, title, abs });
-
-            // 按空行分块并记录起始行号
-            let mut buf = String::new();
-            let mut start_line = 1usize;
-            let mut ln = 1usize;
-            for line in content.lines() {
-                if line.trim().is_empty() {
-                    push_chunk(&mut chunks, doc, start_line, &mut buf);
+            Event::Text(t) => {
+                if in_heading {
+                    if let Some(last) = stack.last_mut() {
+                        if !last.1.is_empty() {
+                            last.1.push(' ');
+                        }
+                        last.1.push_str(t.trim());
+                    }
                 } else {
                     if buf.is_empty() {
-                        start_line = ln;
-                    } else {
-                        buf.push('\n');
+                        sec_start_byte = range.start;
                     }
-                    buf.push_str(line);
+                    buf.push_str(&t);
                 }
-                ln += 1;
             }
-            push_chunk(&mut chunks, doc, start_line, &mut buf);
+            Event::Code(t) => {
+                if buf.is_empty() {
+                    sec_start_byte = range.start;
+                }
+                buf.push_str(&t);
+            }
+            Event::SoftBreak | Event::HardBreak => buf.push('\n'),
+            Event::End(TagEnd::Paragraph)
+            | Event::End(TagEnd::Table)
+            | Event::End(TagEnd::List(false))
+            | Event::End(TagEnd::BlockQuote(_))
+            | Event::End(TagEnd::CodeBlock) => {
+                flush_md(&mut buf, &mut out, &stack, title, rel, abs, sec_start_byte, &line_starts);
+                sec_start_byte = range.end;
+            }
+            _ => {}
         }
-
-        Ok(Index { docs, chunks })
     }
+    flush_md(&mut buf, &mut out, &stack, title, rel, abs, sec_start_byte, &line_starts);
+    out
+}
 
-    pub fn stats(&self) -> Stats {
-        Stats { docs: self.docs.len(), chunks: self.chunks.len() }
-    }
-
-    /// 统计某词在文本中出现次数（非重叠），并返回首次位置；上限 cap 防御超长词
-    fn count_at(hay: &str, needle: &str, cap: i32) -> Option<(i32, usize)> {
-        if needle.is_empty() {
-            return None;
-        }
-        let mut count = 0i32;
-        let mut first: Option<usize> = None;
-        let mut from = 0usize;
-        while count < cap {
-            match hay[from..].find(needle) {
-                Some(p) => {
-                    let abs = from + p;
-                    if first.is_none() {
-                        first = Some(abs);
-                    }
-                    count += 1;
-                    from = abs + needle.len();
-                }
-                None => break,
-            }
-        }
-        first.map(|p| (count, p))
-    }
-
-    pub fn search(&self, query: &str) -> Vec<Hit> {
-        let q = query.trim();
-        if q.is_empty() {
-            return Vec::new();
-        }
-        let ql = q.to_lowercase();
-        let terms: Vec<&str> = ql.split_whitespace().collect();
-        if terms.is_empty() {
-            return Vec::new();
-        }
-        let joined = terms.join(" ");
-
-        // 每个文档只保留得分最高的块
-        let mut best: HashMap<usize, (i32, usize)> = HashMap::new();
-        for (ci, ch) in self.chunks.iter().enumerate() {
-            let mut score = 0i32;
-            let mut all = true;
-            for t in &terms {
-                match Self::count_at(&ch.lower, t, 3) {
-                    Some((count, _pos)) => {
-                        score += 10 * count;
-                    }
-                    None => {
-                        all = false;
-                        break;
-                    }
-                }
-            }
-            if !all {
-                continue;
-            }
-            if ch.lower.contains(&joined) {
-                score += 60;
-            }
-            let title_lower = self.docs[ch.doc].title.to_lowercase();
-            if terms.iter().all(|t| title_lower.contains(t)) {
-                score += 150;
-                if title_lower.contains(&joined) {
-                    score += 40;
-                }
-            }
-            let e = best.entry(ch.doc).or_insert((score, ci));
-            if score > e.0 {
-                *e = (score, ci);
-            }
-        }
-
-        let mut hits: Vec<Hit> = best
-            .into_iter()
-            .map(|(doc, (score, ci))| {
-                let ch = &self.chunks[ci];
-                Hit {
-                    title: self.docs[doc].title.clone(),
-                    path: self.docs[doc].path.clone(),
-                    abs: self.docs[doc].abs.clone(),
-                    snippet: make_snippet(&ch.text, &terms),
-                    line: ch.line,
-                    score,
-                }
-            })
+/// 收尾一个 Markdown 段块：面包屑 = [文档标题, ...标题栈]
+fn flush_md(
+    buf: &mut String,
+    out: &mut Vec<DocumentChunk>,
+    stack: &[(usize, String)],
+    title: &str,
+    rel: &str,
+    abs: &str,
+    start_byte: usize,
+    line_starts: &[usize],
+) {
+    if let Some(text) = finalize(buf) {
+        let bc: Vec<String> = std::iter::once(title.to_string())
+            .chain(stack.iter().map(|(_, s)| s.clone()))
             .collect();
-        hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
-        hits.truncate(50);
-        hits
+        let line = match line_starts.binary_search(&start_byte) {
+            Ok(i) => i + 1,
+            Err(i) => i,
+        };
+        out.push(chunk(TYPE_MANUAL, bc, title, rel, abs, text, line));
     }
 }
 
-/// 从原文裁剪命中片段：以首个命中词为中心取约 120 字符窗口，按字符边界对齐
-fn make_snippet(text: &str, terms: &[&str]) -> String {
-    let lower = text.to_lowercase();
-    let pos = terms
-        .iter()
-        .filter_map(|t| lower.find(t))
-        .min()
-        .unwrap_or(0);
-    // 将字节偏移吸附到字符边界
-    let char_start = lower[..pos].chars().count();
-    let chars: Vec<char> = text.chars().collect();
-    const RADIUS: usize = 60;
-    let start = char_start.saturating_sub(RADIUS);
-    let end = (char_start + RADIUS).min(chars.len());
-    let mut s = String::new();
-    if start > 0 {
-        s.push('…');
+/// 纯文本兜底：按空行分段
+fn chunk_plain(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut start_line = 1usize;
+    let mut ln = 1usize;
+    for line in content.lines() {
+        let t = line.trim_end();
+        if t.trim().is_empty() {
+            if let Some(text) = finalize(&mut buf) {
+                out.push(chunk(TYPE_NOTE, vec![title.to_string()], title, rel, abs, text, start_line));
+            }
+        } else {
+            if buf.is_empty() {
+                start_line = ln;
+            }
+            buf.push_str(t);
+            buf.push('\n');
+        }
+        ln += 1;
     }
-    s.extend(&chars[start..end]);
-    if end < chars.len() {
-        s.push('…');
+    if let Some(text) = finalize(&mut buf) {
+        out.push(chunk(TYPE_NOTE, vec![title.to_string()], title, rel, abs, text, start_line));
     }
-    // 压缩换行便于列表展示
-    s.replace('\n', " ")
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chunk(
+    doc_type: &str,
+    breadcrumbs: Vec<String>,
+    title: &str,
+    rel: &str,
+    abs: &str,
+    text: String,
+    line: usize,
+) -> DocumentChunk {
+    DocumentChunk {
+        doc_type: doc_type.to_string(),
+        breadcrumbs,
+        title: title.to_string(),
+        path: rel.to_string(),
+        abs: abs.to_string(),
+        text,
+        line,
+    }
+}
+
+/// 供测试与工具核对面包屑组装
+pub fn law_breadcrumb(title: &str, stack: &[String], article: &str) -> Vec<String> {
+    let mut bc = vec![title.to_string()];
+    bc.extend(stack.iter().cloned());
+    bc.push(article.to_string());
+    bc
+}
+
+/// (调试用) 统计各类型块数
+pub fn stats_by_type(chunks: &[DocumentChunk]) -> HashMap<&str, usize> {
+    let mut m: HashMap<&str, usize> = HashMap::new();
+    for c in chunks {
+        *m.entry(match c.doc_type.as_str() {
+            TYPE_LAW => "Law",
+            TYPE_MANUAL => "Manual",
+            TYPE_QA => "QA",
+            _ => "Note",
+        })
+        .or_insert(0) += 1;
+    }
+    m
 }

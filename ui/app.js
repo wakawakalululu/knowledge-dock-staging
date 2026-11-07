@@ -23,6 +23,11 @@ let knowledgeDir = null;
 let cfg = null;           // 主进程下发的配置
 let settingsOpen = false; // 设置面板展开状态
 let expanded = false;     // 当前窗口形态（与后端同步）
+let lastTerms = [];       // 实际参与匹配的词（含同义词展开），用于高亮
+let ctxCache = {};        // 命中项上下文缓存: hitIndex -> string
+let ctxOpen = {};         // 命中项上下文展开状态
+
+const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
 
 /* ---------- 工具 ---------- */
 function escapeHtml(s) {
@@ -34,14 +39,15 @@ function escapeReg(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** 把片段中的命中词包上 <mark>（大小写不敏感，先转义再匹配） */
+/** 把片段/标题中的命中词包上 <mark>（大小写不敏感，先转义再匹配；含同义词） */
 function highlight(snippet, query) {
   const safe = escapeHtml(snippet);
-  const terms = query.trim().split(/\s+/).filter(Boolean).map(escapeReg);
+  const fromQuery = (query || "").trim().split(/\s+/).filter(Boolean);
+  const terms = [...fromQuery, ...lastTerms].map(escapeReg);
   if (!terms.length) return escapeHtml(snippet);
   // 按长度降序匹配，避免短词破坏长词高亮
   terms.sort((a, b) => b.length - a.length);
-  const re = new RegExp("(" + terms.join("|") + ")", "gi");
+  const re = new RegExp("(" + [...new Set(terms)].join("|") + ")", "gi");
   return safe.replace(re, "<mark>$1</mark>");
 }
 
@@ -77,14 +83,32 @@ function render(query) {
     return;
   }
   $resList.innerHTML = hits
-    .map((h, i) => `
+    .map((h, i) => {
+      const bc = (h.breadcrumbs && h.breadcrumbs.length)
+        ? `<div class="hit-bc">${h.breadcrumbs.map((b) => escapeHtml(b)).join('<span class="bc-sep">›</span>')}</div>`
+        : "";
+      const badge = TYPE_LABEL[h.doc_type]
+        ? `<span class="badge badge-${h.doc_type.toLowerCase()}">${TYPE_LABEL[h.doc_type]}</span>`
+        : "";
+      const open = ctxOpen[i];
+      const ctx = open
+        ? `<div class="hit-ctx">${ctxCache[i] ? escapeHtml(ctxCache[i]) : "加载中…"}</div>`
+        : "";
+      return `
       <div class="hit ${i === active ? "active" : ""}" data-i="${i}">
         <div class="hit-top">
+          ${badge}
           <span class="hit-title">${highlight(h.title, query)}</span>
           <span class="hit-path">${escapeHtml(shortPath(h.path))}</span>
+          <button class="ctx-btn" data-ctx="${i}" title="展开上下文">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></svg>
+          </button>
         </div>
+        ${bc}
         <div class="hit-snippet">${highlight(h.snippet, query)}</div>
-      </div>`)
+        ${ctx}
+      </div>`;
+    })
     .join("");
 
   $resList.querySelectorAll(".hit").forEach((el) => {
@@ -92,6 +116,36 @@ function render(query) {
     el.addEventListener("dblclick", () => openHit(Number(el.dataset.i), true));
     el.addEventListener("mousemove", () => setActive(Number(el.dataset.i)));
   });
+  // 上下文展开按钮（阻止冒泡，不触发打开文件）
+  $resList.querySelectorAll(".ctx-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleContext(Number(btn.dataset.ctx));
+    });
+  });
+}
+
+/** 就地展开上下文：请求源文件 前N行+后M行（不打开文件） */
+async function toggleContext(i) {
+  const h = hits[i];
+  if (!h) return;
+  if (ctxOpen[i]) {
+    delete ctxOpen[i];
+  } else {
+    ctxOpen[i] = true;
+    if (!ctxCache[i]) {
+      try {
+        ctxCache[i] = await invoke("expand_context", {
+          path: h.abs, line: h.line, before: 10, after: 20,
+        });
+      } catch (e) {
+        ctxCache[i] = "读取上下文失败: " + e;
+      }
+    }
+  }
+  render($q.value);
+  const el = $resList.querySelector(`.hit[data-i="${i}"]`);
+  if (el) el.scrollIntoView({ block: "nearest" });
 }
 
 function setActive(i) {
@@ -120,13 +174,17 @@ async function doSearch() {
   if (!query.trim()) {
     hits = [];
     active = -1;
+    lastTerms = [];
     updateView();
     return;
   }
   try {
-    hits = await invoke("search", { q: query });
+    const r = await invoke("search", { q: query });
+    hits = r.hits;
+    lastTerms = r.terms || [];
   } catch (e) {
     hits = [];
+    lastTerms = [];
     console.error(e);
   }
   active = hits.length ? 0 : -1;
@@ -138,6 +196,7 @@ function clearInput() {
   $btnClear.hidden = true;
   hits = [];
   active = -1;
+  lastTerms = [];
   updateView();
 }
 
@@ -264,6 +323,7 @@ listen("ui-reset", () => {
   $btnClear.hidden = true;
   hits = [];
   active = -1;
+  lastTerms = [];
   settingsOpen = false;
   updateView();
   $q.focus();

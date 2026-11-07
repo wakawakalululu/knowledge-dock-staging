@@ -2,20 +2,23 @@
 //!
 //! 形态：折叠时仅一条搜索框高度，检索时向下展开结果面板；
 //! 全局快捷键唤起/隐藏，失焦自动隐藏（钉住模式除外）。
+//! 检索：Tantivy BM25 + jieba 分词 + 持久化索引 + 同义词改写（纯离线）。
 
 pub mod config;
+pub mod engine;
 pub mod indexer;
 
 #[cfg(test)]
 mod search_tests;
 
 use config::Config;
-use indexer::{Hit, Index, Stats};
+use engine::{Engine, SearchResponse};
+use indexer::Stats;
 use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -27,7 +30,7 @@ const COLLAPSED_H: f64 = 76.0;
 const EXPANDED_H: f64 = 600.0;
 
 struct AppState {
-    index: Mutex<Index>,
+    engine: Arc<Engine>,
     cfg: Mutex<Config>,
     /// 原生目录选择对话框打开期间禁止失焦隐藏
     dialog_open: AtomicBool,
@@ -46,15 +49,20 @@ struct PickResult {
     error: Option<String>,
 }
 
-fn rebuild_index(app: &AppHandle, state: &State<'_, AppState>, dir: &Path) -> Result<Stats, String> {
-    let index = Index::build(dir)?;
-    let stats = index.stats();
-    *state.index.lock().expect("index lock") = index;
-    let _ = app.emit("index-updated", &stats);
-    Ok(stats)
+/// 后台执行一次同步并推送统计（首次构建/校验/增量复用同一入口）
+fn sync_and_emit(app: &AppHandle, dir: &Path) {
+    let state: State<AppState> = app.state();
+    match state.engine.sync(dir) {
+        Ok(stats) => {
+            let _ = app.emit("index-updated", &stats);
+        }
+        Err(e) => {
+            let _ = app.emit("index-error", e);
+        }
+    }
 }
 
-/// 启动/重启文件监听线程：事件静默 900ms 后重建索引并推送前端
+/// 启动/重启文件监听线程：事件静默 900ms 后增量更新索引并推送前端
 fn start_watcher(app: &AppHandle, dir: PathBuf) {
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -78,7 +86,7 @@ fn start_watcher(app: &AppHandle, dir: PathBuf) {
             let state = handle.state::<AppState>();
             let dir_now = state.cfg.lock().expect("cfg lock").knowledge_dir.clone();
             if let Some(d) = dir_now {
-                let _ = rebuild_index(&handle, &state, Path::new(&d));
+                sync_and_emit(&handle, Path::new(&d));
             }
         }
     });
@@ -187,12 +195,12 @@ fn ui_mode(app: AppHandle, mode: String, state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-fn search(q: String, state: State<'_, AppState>) -> Vec<Hit> {
-    state.index.lock().expect("index lock").search(&q)
+fn search(q: String, state: State<'_, AppState>) -> SearchResponse {
+    state.engine.search(&q, 50)
 }
 
 #[tauri::command]
-fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
+fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
     let dir = state
         .cfg
         .lock()
@@ -200,7 +208,7 @@ fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
         .knowledge_dir
         .clone()
         .ok_or("尚未设置知识库目录")?;
-    rebuild_index(&app, &state, Path::new(&dir))
+    state.engine.sync(Path::new(&dir))
 }
 
 #[tauri::command]
@@ -227,8 +235,7 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
     };
     let dir_str = path.to_string_lossy().to_string();
 
-    let result = rebuild_index(&app, &state, path);
-    match result {
+    match state.engine.sync(path) {
         Ok(stats) => {
             {
                 let mut cfg = state.cfg.lock().expect("cfg lock");
@@ -240,6 +247,20 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
         }
         Err(e) => Ok(PickResult { dir: None, stats: None, error: Some(e) }),
     }
+}
+
+/// 就地展开上下文：读取源文件命中块前 N 行 + 后 M 行（不打开源文件）
+#[tauri::command]
+fn expand_context(path: String, line: usize, before: usize, after: usize) -> Result<String, String> {
+    let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let content = String::from_utf8_lossy(&raw);
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return Ok(String::new());
+    }
+    let start = line.saturating_sub(before).max(1);
+    let end = (line + after).min(lines.len());
+    Ok(lines[start - 1..end].join("\n"))
 }
 
 #[tauri::command]
@@ -330,6 +351,16 @@ pub fn run() {
             let handle = app.handle().clone();
             let cfg = config::load(&handle);
 
+            // 检索引擎：打开持久化索引（秒开），同义词 = 内嵌默认 + 用户覆盖
+            let data_dir = handle
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("knowledge-dock"));
+            let synonyms = engine::load_synonyms(
+                handle.path().app_config_dir().ok().as_deref(),
+            );
+            let engine = Arc::new(Engine::open_or_create(&data_dir.join("index"), synonyms)?);
+
             // 恢复窗口位置与宽度（越界则保持默认居中）
             if let Some(win) = handle.get_webview_window("main") {
                 let _ = win.set_size(tauri::LogicalSize::new(cfg.width, COLLAPSED_H));
@@ -368,19 +399,22 @@ pub fn run() {
                 let _ = apply_shortcut(&handle, config::DEFAULT_SHORTCUT);
             }
 
-            // 启动时若已有知识库目录则后台建索引 + 监听
+            // 后台校验/构建索引（已建好则秒过），并挂文件监听
             if let Some(dir) = cfg.knowledge_dir.clone() {
-                let state: State<AppState> = handle.state();
-                let _ = rebuild_index(&handle, &state, Path::new(&dir));
+                let h2 = handle.clone();
+                let d2 = dir.clone();
+                std::thread::spawn(move || {
+                    sync_and_emit(&h2, Path::new(&d2));
+                });
                 start_watcher(&handle, PathBuf::from(&dir));
             }
 
+            app.manage(AppState {
+                engine,
+                cfg: Mutex::new(cfg),
+                dialog_open: AtomicBool::new(false),
+            });
             Ok(())
-        })
-        .manage(AppState {
-            index: Mutex::new(Index::empty()),
-            cfg: Mutex::new(Config::default()),
-            dialog_open: AtomicBool::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             get_config,
@@ -389,6 +423,7 @@ pub fn run() {
             search,
             rescan,
             pick_folder,
+            expand_context,
             open_file,
             reveal_file,
             hide_window,
