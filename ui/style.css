@@ -1,4 +1,4 @@
-/* uTools 风格：透明无边框窗 + 圆角卡片 + 深浅色自适应 */
+/* uTools 风格：折叠时仅一条搜索框，展开时向下浮现面板 */
 :root {
   --card-bg: rgba(255, 255, 255, 0.97);
   --card-border: rgba(0, 0, 0, 0.06);
@@ -13,7 +13,7 @@
   --btn-bg: rgba(0, 0, 0, 0.05);
   --btn-bg-hover: rgba(0, 0, 0, 0.09);
   --danger: #e5484d;
-  --shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+  --shadow: 0 10px 36px rgba(0, 0, 0, 0.30);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -29,7 +29,7 @@
     --divider: rgba(255, 255, 255, 0.09);
     --btn-bg: rgba(255, 255, 255, 0.08);
     --btn-bg-hover: rgba(255, 255, 255, 0.14);
-    --shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+    --shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
   }
 }
 
@@ -43,66 +43,29 @@ html, body {
   user-select: none;
 }
 
-/* 卡片：四周留 10px 透明边距，圆角 + 阴影 */
-.card {
+/* 布局容器：窗口高度由后端动态调整，内容顶端对齐 */
+.app {
   position: absolute;
-  inset: 10px;
+  left: 10px; right: 10px; top: 10px; bottom: 10px;
   display: flex;
   flex-direction: column;
+}
+
+/* ---- 搜索条（唯一常驻元素） ---- */
+.bar-card {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  padding: 0 8px 0 14px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: var(--shadow);
-  overflow: hidden;
 }
-
-/* ---- 标题栏（拖动区） ---- */
-.titlebar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 8px 0 14px;
-  flex: none;
-}
-.logo { display: flex; align-items: center; }
-.logo svg { width: 16px; height: 16px; color: var(--accent); }
-.app-name {
-  flex: 1;
-  font-size: 12.5px;
-  color: var(--text-dim);
-  letter-spacing: 0.5px;
-}
-.tb-actions { display: flex; gap: 2px; }
-.tb-btn {
-  width: 28px; height: 28px;
-  border: none; border-radius: 7px;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.tb-btn svg { width: 14px; height: 14px; display: block; }
-.tb-btn:hover { background: var(--hover); color: var(--text); }
-
-/* ---- 搜索栏 ---- */
-.searchbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 12px;
-  padding: 0 12px;
-  height: 42px;
-  flex: none;
-  background: var(--accent-soft);
-  border: 1px solid transparent;
-  border-radius: 10px;
-}
-.searchbar:focus-within { border-color: var(--accent); }
 .s-icon { display: flex; align-items: center; }
-.s-icon svg { width: 15px; height: 15px; opacity: 0.75; }
+.s-icon svg { width: 17px; height: 17px; color: var(--accent); }
 #q {
   flex: 1;
   height: 100%;
@@ -110,10 +73,29 @@ html, body {
   outline: none;
   background: transparent;
   color: var(--text);
-  font-size: 14.5px;
+  font-size: 15px;
   font-family: inherit;
 }
 #q::placeholder { color: var(--text-dim); }
+.bar-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--divider);
+  flex: none;
+}
+.bar-btn {
+  width: 34px; height: 34px;
+  border: none; border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.bar-btn svg { width: 16px; height: 16px; display: block; }
+.bar-btn:hover { background: var(--hover); color: var(--text); }
 .clear-btn {
   border: none;
   width: 22px; height: 22px;
@@ -129,18 +111,34 @@ html, body {
 .clear-btn svg { width: 10px; height: 10px; display: block; }
 .clear-btn:hover { background: var(--btn-bg-hover); color: var(--text); }
 
-/* ---- 结果列表 ---- */
-.results {
+/* ---- 下方面板（结果 / 设置）：随窗口展开浮现 ---- */
+.card-panel {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+/* hidden 属性必须显式压过 display:flex */
+.card-panel[hidden] { display: none; }
+
+/* 结果列表 */
+.res-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 6px 8px;
-  margin-top: 6px;
 }
-.results::-webkit-scrollbar { width: 6px; }
-.results::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 3px; }
+.res-list::-webkit-scrollbar { width: 6px; }
+.res-list::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 3px; }
 
 .empty {
-  padding: 40px 20px;
+  padding: 36px 20px;
   text-align: center;
   color: var(--text-dim);
   font-size: 13px;
@@ -195,18 +193,30 @@ html, body {
 }
 .hit.active mark { background: var(--accent); color: #fff; }
 
-/* ---- 设置面板 ---- */
-.settings {
+/* 结果底部信息条 */
+.res-foot {
   flex: none;
-  margin: 6px 12px;
-  padding: 12px;
-  border-top: 1px solid var(--divider);
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--divider);
+  font-size: 11px;
+  color: var(--text-dim);
 }
-.set-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-.lbl { color: var(--text-dim); flex: none; }
+.foot-hint { opacity: 0.75; }
+
+/* ---- 设置面板 ---- */
+#settings { padding: 14px; gap: 12px; }
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  flex: none;
+}
+.lbl { color: var(--text-dim); flex: none; width: 72px; }
 .dir {
   flex: 1;
   color: var(--text);
@@ -216,7 +226,23 @@ html, body {
   direction: rtl; /* 长路径优先显示末段 */
   text-align: left;
 }
-.set-btns { display: flex; gap: 8px; }
+.set-input {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--divider);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  min-width: 0;
+}
+.set-input:focus { border-color: var(--accent); }
+.set-row.check { cursor: pointer; }
+.set-row.check input { accent-color: var(--accent); }
+.set-btns { display: flex; gap: 8px; flex: none; }
 .set-btns button {
   flex: 1;
   height: 32px;
@@ -235,17 +261,3 @@ html, body {
 .set-btns button svg { width: 13px; height: 13px; flex: none; }
 .set-btns button:hover { background: var(--btn-bg-hover); }
 .set-btns .danger:hover { background: rgba(229, 72, 77, 0.15); color: var(--danger); }
-
-/* ---- 状态栏 ---- */
-.statusbar {
-  flex: none;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  height: 28px;
-  padding: 0 14px;
-  border-top: 1px solid var(--divider);
-  font-size: 11px;
-  color: var(--text-dim);
-}
-#hint { opacity: 0.75; }
