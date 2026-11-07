@@ -5,6 +5,11 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: "发版版本号（如 v0.1.0，留空则仅编译出 artifact）"
+        required: false
+        default: ""
 
 jobs:
   build-windows:
@@ -52,9 +57,10 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-      - name: Release (tag only)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Release (tag push or manual dispatch with version)
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release }}
           files: dist/*
           generate_release_notes: true
