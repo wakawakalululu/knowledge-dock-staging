@@ -166,7 +166,7 @@ impl Index {
     }
 
     /// 统计某词在文本中出现次数（非重叠），并返回首次位置；上限 cap 防御超长词
-    fn count_at(hay: &str, needle: &str, cap: usize) -> Option<(i32, usize)> {
+    fn count_at(hay: &str, needle: &str, cap: i32) -> Option<(i32, usize)> {
         if needle.is_empty() {
             return None;
         }

@@ -1,0 +1,261 @@
+       Fresh unicode-ident v1.0.27
+       Fresh fastrand v2.5.0
+       Fresh proc-macro2 v1.0.107
+       Fresh windows-link v0.2.1
+       Fresh ident_case v1.0.1
+       Fresh quote v1.0.47
+       Fresh phf_generator v0.13.1
+       Fresh serde_core v1.0.229
+       Fresh strsim v0.11.1
+       Fresh new_debug_unreachable v1.0.6
+       Fresh syn v3.0.9
+       Fresh syn v2.0.119
+       Fresh phf_codegen v0.13.1
+       Fresh string_cache_codegen v0.6.1
+       Fresh precomputed-hash v0.1.1
+       Fresh synstructure v0.14.0
+       Fresh zerovec-derive v0.11.7
+       Fresh serde_derive v1.0.229
+       Fresh displaydoc v0.2.7
+       Fresh thiserror-impl v2.0.21
+       Fresh phf_macros v0.13.1
+       Fresh darling_core v0.24.1
+       Fresh stable_deref_trait v1.2.1
+       Fresh zerofrom-derive v0.1.8
+       Fresh yoke-derive v0.8.4
+       Fresh darling_macro v0.24.1
+       Fresh getrandom v0.4.3
+       Fresh string_cache v0.9.0
+       Fresh windows-sys v0.61.2
+       Fresh dtoa v1.0.11
+       Fresh autocfg v1.5.1
+       Fresh darling v0.24.1
+       Fresh zerofrom v0.1.8
+       Fresh web_atoms v0.2.6
+       Fresh dtoa-short v0.3.5
+       Fresh derive_more-impl v2.1.1
+       Fresh cssparser-macros v0.7.1
+       Fresh tendril v0.5.1
+       Fresh serde_with_macros v3.24.0
+       Fresh yoke v0.8.4
+       Fresh serde v1.0.229
+       Fresh cssparser v0.37.0
+       Fresh derive_more v2.1.1
+       Fresh markup5ever v0.39.0
+       Fresh serde_derive_internals v0.29.1
+       Fresh zerovec v0.11.9
+       Fresh servo_arc v0.4.3
+       Fresh bit-vec v0.8.0
+       Fresh rustc-hash v2.1.3
+       Fresh version_check v0.9.5
+       Fresh hashbrown v0.12.3
+       Fresh camino v1.2.6
+       Fresh selectors v0.38.0
+       Fresh bit-set v0.8.0
+       Fresh html5ever v0.39.0
+       Fresh schemars_derive v0.8.22
+       Fresh indexmap v1.9.3
+       Fresh cargo-platform v0.1.9
+       Fresh dyn-clone v1.0.20
+       Fresh foldhash v0.2.0
+       Fresh cargo_metadata v0.19.2
+       Fresh dom_query v0.28.0
+       Fresh memchr v2.8.3
+       Fresh tinystr v0.8.5
+       Fresh litemap v0.8.3
+       Fresh utf_types v1.0.0
+       Fresh writeable v0.6.4
+       Fresh potential_utf v0.1.6
+       Fresh zerotrie v0.2.5
+       Fresh windows-implement v0.60.2
+       Fresh windows-interface v0.59.3
+       Fresh windows-result v0.4.1
+       Fresh windows-strings v0.5.1
+       Fresh smallvec v1.16.5
+       Fresh find-msvc-tools v0.1.15
+       Fresh shlex v2.0.1
+       Fresh rustc_version v0.4.1
+       Fresh icu_normalizer_data v2.4.0
+       Fresh icu_properties_data v2.4.0
+       Fresh icu_locale_core v2.4.0
+       Fresh utf8_iter v1.1.0
+       Fresh windows-core v0.62.2
+       Fresh cc v1.11.1
+       Fresh itoa v1.0.18
+       Fresh windows-threading v0.2.1
+       Fresh simd-adler32 v0.3.10
+       Fresh cargo_toml v1.0.1
+       Fresh thiserror v2.0.21
+       Fresh bitflags v2.13.2
+       Fresh zmij v1.0.23
+       Fresh icu_provider v2.4.0
+       Fresh icu_collections v2.4.0
+       Fresh embed-resource v3.0.12
+       Fresh windows-future v0.3.2
+       Fresh windows-collections v0.3.2
+       Fresh windows-numerics v0.3.1
+       Fresh time-macros v0.2.32
+       Fresh raw-window-handle v0.6.2
+       Fresh static_vcruntime v3.0.0
+       Fresh num-conv v0.2.2
+       Fresh adler2 v2.0.1
+       Fresh percent-encoding v2.3.2
+       Fresh icu_properties v2.4.0
+       Fresh icu_normalizer v2.4.0
+       Fresh tauri-winres v0.3.7
+       Fresh time-core v0.1.9
+       Fresh deranged v0.5.9
+       Fresh typenum v1.20.1
+       Fresh powerfmt v0.2.1
+       Fresh windows v0.62.2
+       Fresh serde_json v1.0.154
+       Fresh form_urlencoded v1.2.2
+       Fresh aho-corasick v1.1.5
+       Fresh dpi v0.1.2
+       Fresh schemars v0.8.22
+       Fresh idna_adapter v1.2.2
+       Fresh time v0.3.55
+       Fresh generic-array v0.14.7
+       Fresh winapi-util v0.1.11
+       Fresh once_cell v1.21.4
+       Fresh alloc-no-stdlib v3.0.0
+       Fresh bytes v1.12.1
+       Fresh regex-syntax v0.8.11
+       Fresh log v0.4.35
+       Fresh miniz_oxide v0.9.1
+       Fresh idna v1.1.0
+       Fresh alloc-stdlib v0.3.0
+       Fresh regex-automata v0.4.18
+       Fresh same-file v1.0.6
+       Fresh crossbeam-utils v0.8.23
+       Fresh crc32fast v1.5.4
+       Fresh typeid v1.0.3
+       Fresh uuid v1.29.1
+       Fresh hashbrown v0.17.1
+       Fresh cfg-if v1.0.5
+       Fresh siphasher v1.0.4
+       Fresh web-time v1.1.0
+       Fresh winnow v1.0.5
+       Fresh tauri-build v2.7.4
+       Fresh url v2.5.8
+       Fresh equivalent v1.0.3
+       Fresh fnv v1.0.7
+       Fresh brotli-decompressor v6.3.0
+       Fresh webview2-com-sys v0.39.1
+       Fresh erased-serde v0.4.11
+       Fresh phf_shared v0.13.1
+       Fresh walkdir v2.5.0
+       Fresh crossbeam-channel v0.5.17
+       Fresh flate2 v1.1.11
+       Fresh regex v1.13.1
+       Fresh toml_parser v1.1.5+spec-1.1.0
+       Fresh http v1.5.0
+       Fresh cfb v0.14.0
+       Fresh indexmap v2.14.2
+       Fresh block-buffer v0.10.4
+       Fresh crypto-common v0.1.7
+       Fresh jsonptr v0.7.1
+       Fresh miniz_oxide v0.8.9
+       Fresh fdeflate v0.3.7
+       Fresh quick-xml v0.42.0
+       Fresh webview2-com-macros v0.8.1
+       Fresh toml_datetime v1.1.3+spec-1.1.0
+       Fresh serde_spanned v1.1.3
+       Fresh windows-version v0.1.7
+       Fresh scopeguard v1.2.0
+       Fresh pin-project-lite v0.2.17
+       Fresh base64 v0.23.1
+       Fresh dunce v1.0.5
+       Fresh toml_writer v1.2.0+spec-1.1.0
+       Fresh png v0.18.1
+       Fresh webview2-com v0.39.1
+       Fresh json-patch v4.2.0
+       Fresh lock_api v0.4.14
+       Fresh infer v0.22.0
+       Fresh digest v0.10.7
+       Fresh cookie v0.18.2
+       Fresh brotli v9.1.1
+       Fresh urlpattern v0.6.0
+       Fresh libc v0.2.191
+       Fresh serde-untagged v0.1.9
+       Fresh plist v1.10.3
+       Fresh toml v1.2.1+spec-1.1.0
+       Fresh phf v0.13.1
+       Fresh tauri-plugin v2.7.2
+       Fresh parking_lot_core v0.9.12
+       Fresh tracing-core v0.1.36
+       Fresh serde_with v3.24.0
+       Fresh anyhow v1.0.104
+       Fresh tracing-attributes v0.1.31
+       Fresh cpufeatures v0.2.17
+       Fresh byteorder v1.5.0
+       Fresh ctor v1.0.13
+       Fresh semver v1.0.28
+       Fresh glob v0.3.4
+       Fresh ico v0.6.0
+       Fresh parking_lot v0.12.5
+       Fresh tracing v0.1.44
+       Fresh sha2 v0.10.9
+       Fresh keyboard-types v0.8.3
+       Fresh option-ext v0.2.0
+       Fresh unicode-segmentation v1.13.3
+       Fresh mio v1.2.4
+       Fresh tauri-utils v2.10.2
+       Fresh tauri-codegen v2.7.4
+       Fresh dirs-sys v0.5.0
+       Fresh softbuffer v0.4.8
+       Fresh tao v0.37.2
+       Fresh wry v0.57.1
+       Fresh muda v0.20.0
+       Fresh socket2 v0.6.5
+       Fresh serialize-to-javascript-impl v0.1.2
+       Fresh window-vibrancy v0.8.1
+       Fresh serde_repr v0.1.21
+       Fresh heck v0.5.0
+       Fresh tauri-runtime v2.12.2
+       Fresh tray-icon v0.25.1
+       Fresh tauri-macros v2.7.4
+       Fresh dirs v7.0.0
+       Fresh getrandom v0.3.4
+       Fresh tokio v1.54.1
+       Fresh serialize-to-javascript v0.1.2
+       Fresh mime v0.3.18
+       Fresh notify-types v2.2.0
+       Fresh open v5.4.5
+       Fresh tauri-runtime-wry v2.12.3
+       Fresh notify v8.2.1
+       Fresh tauri v2.12.5
+       Fresh rfd v0.17.2
+   Compiling knowledge-dock v0.1.0 (C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri)
+    Checking tauri-plugin-fs v2.7.1
+    Checking tauri-plugin-single-instance v2.5.5
+     Running `set CARGO='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\cargo.exe'&& set CARGO_CFG_DEBUG_ASSERTIONS=''&& set CARGO_CFG_FEATURE=''&& set CARGO_CFG_PANIC=unwind&& set CARGO_CFG_TARGET_ABI=''&& set CARGO_CFG_TARGET_ARCH=x86_64&& set CARGO_CFG_TARGET_ENDIAN=little&& set CARGO_CFG_TARGET_ENV=gnu&& set CARGO_CFG_TARGET_FAMILY=windows&& set CARGO_CFG_TARGET_FEATURE=cmpxchg16b,fxsr,sse,sse2,sse3&& set CARGO_CFG_TARGET_HAS_ATOMIC=128,16,32,64,8,ptr&& set CARGO_CFG_TARGET_HAS_ATOMIC_PRIMITIVE_ALIGNMENT=128,16,32,64,8,ptr&& set CARGO_CFG_TARGET_OS=windows&& set CARGO_CFG_TARGET_POINTER_WIDTH=64&& set CARGO_CFG_TARGET_VENDOR=pc&& set CARGO_CFG_WINDOWS=''&& set CARGO_ENCODED_RUSTFLAGS=''&& set CARGO_MANIFEST_DIR='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri'&& set CARGO_MANIFEST_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\Cargo.toml'&& set CARGO_PKG_AUTHORS=''&& set CARGO_PKG_DESCRIPTION='uTools 风格的本地知识库悬浮检索工具'&& set CARGO_PKG_HOMEPAGE=''&& set CARGO_PKG_LICENSE=''&& set CARGO_PKG_LICENSE_FILE=''&& set CARGO_PKG_NAME=knowledge-dock&& set CARGO_PKG_README=''&& set CARGO_PKG_REPOSITORY=''&& set CARGO_PKG_RUST_VERSION=''&& set CARGO_PKG_VERSION=0.1.0&& set CARGO_PKG_VERSION_MAJOR=0&& set CARGO_PKG_VERSION_MINOR=1&& set CARGO_PKG_VERSION_PATCH=0&& set CARGO_PKG_VERSION_PRE=''&& set DEBUG=true&& set DEP_TAURI_CORE:APP__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-app-permission-files'&& set DEP_TAURI_CORE:EVENT__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-event-permission-files'&& set DEP_TAURI_CORE:IMAGE__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-image-permission-files'&& set DEP_TAURI_CORE:MENU__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-menu-permission-files'&& set DEP_TAURI_CORE:PATH__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-path-permission-files'&& set DEP_TAURI_CORE:RESOURCES__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-resources-permission-files'&& set DEP_TAURI_CORE:TRAY__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-tray-permission-files'&& set DEP_TAURI_CORE:WEBVIEW__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-webview-permission-files'&& set DEP_TAURI_CORE:WINDOW__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-window-permission-files'&& set DEP_TAURI_CORE__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-permission-files'&& set DEP_TAURI_DEV=true&& set DEP_TAURI_GLOBAL_API_SCRIPT_PATH='\\?\C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.12.5\scripts\bundle.global.js'&& set DEP_TAURI_PLUGIN_DIALOG_GLOBAL_API_SCRIPT_PATH='\\?\C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-dialog-2.8.4\api-iife.js'&& set DEP_TAURI_PLUGIN_DIALOG_PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-plugin-dialog-cd902ff8b46b9e0b\out\tauri-plugin-dialog-permission-files'&& set HOST=x86_64-pc-windows-gnu&& set NUM_JOBS=16&& set OPT_LEVEL=0&& set OUT_DIR='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\knowledge-dock-ca624fbda9cc69d5\out'&& set PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps;C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib;C:\Users\Admin\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin;C:\Users\Admin\bin;C:\Users\Admin\Desktop\code\SecOne\.python\Scripts;C:\Users\Admin\Desktop\code\SecOne\.python;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32\OpenSSH;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x86;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x64;C:\Windows\System32;C:\Program Files\nodejs;C:\Program Files\Git\cmd;C:\Program Files\Go\bin;C:\Program Files\PowerShell\7;C:\Program Files\WSL;C:\Users\Admin\AppData\Local\Programs\magpie;C:\Users\Admin\.cargo\bin;C:\Users\Admin\AppData\Local\RustCode;C:\Users\Admin\AppData\Local\Programs\Python\Python314\Scripts;C:\Users\Admin\AppData\Local\Programs\Python\Python314;C:\Users\Admin\AppData\Local\Programs\Python\Launcher;C:\Users\Admin\AppData\Local\Microsoft\WindowsApps;C:\Program Files (x86)\Ecloud AI Assist\resources\bin;C:\Users\Admin\AppData\Roaming\npm;C:\Program Files (x86)\Ecloud AI Assist\resources\cli;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\Admin\AppData\Local\Programs\Zed\bin;C:\Users\Admin\go\bin;C:\Users\Admin\MinGit\cmd;C:\Users\Admin\flutter-sdk\flutter\bin;C:\Users\Admin\AppData\Local\Programs\GitHub CLI\bin;C:\Users\Admin\.opencode\bin;C:\Go\bin;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin\copilot-shim;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ripgrep;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ugrep;C:\Program Files\nodejs;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin'&& set PROFILE=debug&& set RUSTC='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\rustc.exe'&& set RUSTDOC='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\rustdoc.exe'&& set TARGET=x86_64-pc-windows-gnu&& C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\knowledge-dock-1041ad6f98713475\build-script-build`
+     Running `set CARGO='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\cargo.exe'&& set CARGO_CRATE_NAME=tauri_plugin_fs&& set CARGO_MANIFEST_DIR='C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-fs-2.7.1'&& set CARGO_MANIFEST_PATH='C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-fs-2.7.1\Cargo.toml'&& set CARGO_PKG_AUTHORS='Tauri Programme within The Commons Conservancy'&& set CARGO_PKG_DESCRIPTION='Access the file system.'&& set CARGO_PKG_HOMEPAGE=''&& set CARGO_PKG_LICENSE='Apache-2.0 OR MIT'&& set CARGO_PKG_LICENSE_FILE=''&& set CARGO_PKG_NAME=tauri-plugin-fs&& set CARGO_PKG_README=README.md&& set CARGO_PKG_REPOSITORY='https://github.com/tauri-apps/plugins-workspace'&& set CARGO_PKG_RUST_VERSION=1.90&& set CARGO_PKG_VERSION=2.7.1&& set CARGO_PKG_VERSION_MAJOR=2&& set CARGO_PKG_VERSION_MINOR=7&& set CARGO_PKG_VERSION_PATCH=1&& set CARGO_PKG_VERSION_PRE=''&& set OUT_DIR='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-plugin-fs-23c153301607f9aa\out'&& set PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps;C:\Users\Admin\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin;C:\Users\Admin\bin;C:\Users\Admin\Desktop\code\SecOne\.python\Scripts;C:\Users\Admin\Desktop\code\SecOne\.python;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32\OpenSSH;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x86;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x64;C:\Windows\System32;C:\Program Files\nodejs;C:\Program Files\Git\cmd;C:\Program Files\Go\bin;C:\Program Files\PowerShell\7;C:\Program Files\WSL;C:\Users\Admin\AppData\Local\Programs\magpie;C:\Users\Admin\.cargo\bin;C:\Users\Admin\AppData\Local\RustCode;C:\Users\Admin\AppData\Local\Programs\Python\Python314\Scripts;C:\Users\Admin\AppData\Local\Programs\Python\Python314;C:\Users\Admin\AppData\Local\Programs\Python\Launcher;C:\Users\Admin\AppData\Local\Microsoft\WindowsApps;C:\Program Files (x86)\Ecloud AI Assist\resources\bin;C:\Users\Admin\AppData\Roaming\npm;C:\Program Files (x86)\Ecloud AI Assist\resources\cli;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\Admin\AppData\Local\Programs\Zed\bin;C:\Users\Admin\go\bin;C:\Users\Admin\MinGit\cmd;C:\Users\Admin\flutter-sdk\flutter\bin;C:\Users\Admin\AppData\Local\Programs\GitHub CLI\bin;C:\Users\Admin\.opencode\bin;C:\Go\bin;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin\copilot-shim;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ripgrep;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ugrep;C:\Program Files\nodejs;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin'&& C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\rustc.exe --crate-name tauri_plugin_fs --edition=2024 'C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-fs-2.7.1\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata -C embed-bitcode=no -C debuginfo=2 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("notify", "notify-debouncer-full", "watch"))' -C metadata=f63560aeef95f013 -C extra-filename=-ad7b079690b266c4 --out-dir 'C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps' -L 'dependency=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps' --extern 'anyhow=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libanyhow-5f4c0d45b9d8d580.rmeta' --extern 'dunce=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libdunce-baf0322c96bcfac7.rmeta' --extern 'glob=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libglob-eb09067f2e811834.rmeta' --extern 'log=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\liblog-ed6f87911a041b78.rmeta' --extern 'percent_encoding=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libpercent_encoding-0804bb3537300f36.rmeta' --extern 'serde=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libserde-918ea6c22c63ec84.rmeta' --extern 'serde_json=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libserde_json-a9de4f6ccff8f5b4.rmeta' --extern 'serde_repr=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\serde_repr-a4188115ef0cf8f9.dll' --extern 'tauri=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libtauri-1e5f827e183d7809.rmeta' --extern 'thiserror=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libthiserror-57ae9459aae1cdbc.rmeta' --extern 'url=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\liburl-3fdef3270e18df25.rmeta' --cap-lints warn -L 'native=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\webview2-com-sys-0a5a7f722207b245\out\x64' --cfg desktop --check-cfg 'cfg(mobile)' --check-cfg 'cfg(desktop)'`
+     Running `set CARGO='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\cargo.exe'&& set CARGO_CRATE_NAME=tauri_plugin_single_instance&& set CARGO_MANIFEST_DIR='C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-single-instance-2.5.5'&& set CARGO_MANIFEST_PATH='C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-single-instance-2.5.5\Cargo.toml'&& set CARGO_PKG_AUTHORS='Tauri Programme within The Commons Conservancy'&& set CARGO_PKG_DESCRIPTION='Ensure a single instance of your tauri app is running.'&& set CARGO_PKG_HOMEPAGE=''&& set CARGO_PKG_LICENSE='Apache-2.0 OR MIT'&& set CARGO_PKG_LICENSE_FILE=''&& set CARGO_PKG_NAME=tauri-plugin-single-instance&& set CARGO_PKG_README=README.md&& set CARGO_PKG_REPOSITORY='https://github.com/tauri-apps/plugins-workspace'&& set CARGO_PKG_RUST_VERSION=1.90&& set CARGO_PKG_VERSION=2.5.5&& set CARGO_PKG_VERSION_MAJOR=2&& set CARGO_PKG_VERSION_MINOR=5&& set CARGO_PKG_VERSION_PATCH=5&& set CARGO_PKG_VERSION_PRE=''&& set PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps;C:\Users\Admin\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin;C:\Users\Admin\bin;C:\Users\Admin\Desktop\code\SecOne\.python\Scripts;C:\Users\Admin\Desktop\code\SecOne\.python;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32\OpenSSH;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x86;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x64;C:\Windows\System32;C:\Program Files\nodejs;C:\Program Files\Git\cmd;C:\Program Files\Go\bin;C:\Program Files\PowerShell\7;C:\Program Files\WSL;C:\Users\Admin\AppData\Local\Programs\magpie;C:\Users\Admin\.cargo\bin;C:\Users\Admin\AppData\Local\RustCode;C:\Users\Admin\AppData\Local\Programs\Python\Python314\Scripts;C:\Users\Admin\AppData\Local\Programs\Python\Python314;C:\Users\Admin\AppData\Local\Programs\Python\Launcher;C:\Users\Admin\AppData\Local\Microsoft\WindowsApps;C:\Program Files (x86)\Ecloud AI Assist\resources\bin;C:\Users\Admin\AppData\Roaming\npm;C:\Program Files (x86)\Ecloud AI Assist\resources\cli;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\Admin\AppData\Local\Programs\Zed\bin;C:\Users\Admin\go\bin;C:\Users\Admin\MinGit\cmd;C:\Users\Admin\flutter-sdk\flutter\bin;C:\Users\Admin\AppData\Local\Programs\GitHub CLI\bin;C:\Users\Admin\.opencode\bin;C:\Go\bin;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin\copilot-shim;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ripgrep;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ugrep;C:\Program Files\nodejs;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin'&& C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\rustc.exe --crate-name tauri_plugin_single_instance --edition=2024 'C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-single-instance-2.5.5\src\lib.rs' --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata -C embed-bitcode=no -C debuginfo=2 --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values("deep-link", "semver"))' -C metadata=1d3503214b1bc601 -C extra-filename=-9e597fcc7a021fd4 --out-dir 'C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps' -L 'dependency=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps' --extern 'serde=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libserde-918ea6c22c63ec84.rmeta' --extern 'serde_json=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libserde_json-a9de4f6ccff8f5b4.rmeta' --extern 'tauri=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libtauri-1e5f827e183d7809.rmeta' --extern 'thiserror=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libthiserror-57ae9459aae1cdbc.rmeta' --extern 'tokio=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libtokio-74994825924bd060.rmeta' --extern 'tracing=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libtracing-7028bc56040bbb00.rmeta' --extern 'windows_sys=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps\libwindows_sys-6346c7ef82d954b5.rmeta' --cap-lints warn -L 'native=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\webview2-com-sys-0a5a7f722207b245\out\x64'`
+[knowledge-dock 0.1.0] 'gcc' �����ڲ����ⲿ���Ҳ���ǿ����еĳ���
+[knowledge-dock 0.1.0] ���������ļ���
+[knowledge-dock 0.1.0] windres: preprocessing failed.
+[knowledge-dock 0.1.0] 
+[knowledge-dock 0.1.0] thread 'main' (32420) panicked at C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-winres-0.3.7\src\lib.rs:543:14:
+[knowledge-dock 0.1.0] called `Result::unwrap()` on an `Err` value: Failed("windres failed to compile \"C:\\Users\\Admin\\.zcode\\workspace\\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\\knowledge-dock\\src-tauri\\target\\debug\\build\\knowledge-dock-ca624fbda9cc69d5\\out\\resource.rc\" into \"C:\\Users\\Admin\\.zcode\\workspace\\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\\knowledge-dock\\src-tauri\\target\\debug\\build\\knowledge-dock-ca624fbda9cc69d5\\out\\libresource.a\" with exit code: 1")
+[knowledge-dock 0.1.0] note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: failed to run custom build command for `knowledge-dock v0.1.0 (C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri)`
+
+Caused by:
+  process didn't exit successfully: `set CARGO='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\cargo.exe'&& set CARGO_CFG_DEBUG_ASSERTIONS=''&& set CARGO_CFG_FEATURE=''&& set CARGO_CFG_PANIC=unwind&& set CARGO_CFG_TARGET_ABI=''&& set CARGO_CFG_TARGET_ARCH=x86_64&& set CARGO_CFG_TARGET_ENDIAN=little&& set CARGO_CFG_TARGET_ENV=gnu&& set CARGO_CFG_TARGET_FAMILY=windows&& set CARGO_CFG_TARGET_FEATURE=cmpxchg16b,fxsr,sse,sse2,sse3&& set CARGO_CFG_TARGET_HAS_ATOMIC=128,16,32,64,8,ptr&& set CARGO_CFG_TARGET_HAS_ATOMIC_PRIMITIVE_ALIGNMENT=128,16,32,64,8,ptr&& set CARGO_CFG_TARGET_OS=windows&& set CARGO_CFG_TARGET_POINTER_WIDTH=64&& set CARGO_CFG_TARGET_VENDOR=pc&& set CARGO_CFG_WINDOWS=''&& set CARGO_ENCODED_RUSTFLAGS=''&& set CARGO_MANIFEST_DIR='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri'&& set CARGO_MANIFEST_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\Cargo.toml'&& set CARGO_PKG_AUTHORS=''&& set CARGO_PKG_DESCRIPTION='uTools 风格的本地知识库悬浮检索工具'&& set CARGO_PKG_HOMEPAGE=''&& set CARGO_PKG_LICENSE=''&& set CARGO_PKG_LICENSE_FILE=''&& set CARGO_PKG_NAME=knowledge-dock&& set CARGO_PKG_README=''&& set CARGO_PKG_REPOSITORY=''&& set CARGO_PKG_RUST_VERSION=''&& set CARGO_PKG_VERSION=0.1.0&& set CARGO_PKG_VERSION_MAJOR=0&& set CARGO_PKG_VERSION_MINOR=1&& set CARGO_PKG_VERSION_PATCH=0&& set CARGO_PKG_VERSION_PRE=''&& set DEBUG=true&& set DEP_TAURI_CORE:APP__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-app-permission-files'&& set DEP_TAURI_CORE:EVENT__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-event-permission-files'&& set DEP_TAURI_CORE:IMAGE__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-image-permission-files'&& set DEP_TAURI_CORE:MENU__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-menu-permission-files'&& set DEP_TAURI_CORE:PATH__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-path-permission-files'&& set DEP_TAURI_CORE:RESOURCES__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-resources-permission-files'&& set DEP_TAURI_CORE:TRAY__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-tray-permission-files'&& set DEP_TAURI_CORE:WEBVIEW__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-webview-permission-files'&& set DEP_TAURI_CORE:WINDOW__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-window-permission-files'&& set DEP_TAURI_CORE__CORE_PLUGIN___PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-79d2860a6ca03ab0\out\tauri-core-permission-files'&& set DEP_TAURI_DEV=true&& set DEP_TAURI_GLOBAL_API_SCRIPT_PATH='\\?\C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.12.5\scripts\bundle.global.js'&& set DEP_TAURI_PLUGIN_DIALOG_GLOBAL_API_SCRIPT_PATH='\\?\C:\Users\Admin\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-plugin-dialog-2.8.4\api-iife.js'&& set DEP_TAURI_PLUGIN_DIALOG_PERMISSION_FILES_PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\tauri-plugin-dialog-cd902ff8b46b9e0b\out\tauri-plugin-dialog-permission-files'&& set HOST=x86_64-pc-windows-gnu&& set NUM_JOBS=16&& set OPT_LEVEL=0&& set OUT_DIR='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\knowledge-dock-ca624fbda9cc69d5\out'&& set PATH='C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\deps;C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib;C:\Users\Admin\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\local\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\usr\bin;C:\Program Files\Git\ucrt64\bin;C:\Program Files\Git\usr\bin;C:\Users\Admin\bin;C:\Users\Admin\Desktop\code\SecOne\.python\Scripts;C:\Users\Admin\Desktop\code\SecOne\.python;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32\OpenSSH;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x86;C:\Program Files (x86)\ZTEGuestOS\vmcomm\x64;C:\Windows\System32;C:\Program Files\nodejs;C:\Program Files\Git\cmd;C:\Program Files\Go\bin;C:\Program Files\PowerShell\7;C:\Program Files\WSL;C:\Users\Admin\AppData\Local\Programs\magpie;C:\Users\Admin\.cargo\bin;C:\Users\Admin\AppData\Local\RustCode;C:\Users\Admin\AppData\Local\Programs\Python\Python314\Scripts;C:\Users\Admin\AppData\Local\Programs\Python\Python314;C:\Users\Admin\AppData\Local\Programs\Python\Launcher;C:\Users\Admin\AppData\Local\Microsoft\WindowsApps;C:\Program Files (x86)\Ecloud AI Assist\resources\bin;C:\Users\Admin\AppData\Roaming\npm;C:\Program Files (x86)\Ecloud AI Assist\resources\cli;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin;C:\Users\Admin\AppData\Local\Programs\Zed\bin;C:\Users\Admin\go\bin;C:\Users\Admin\MinGit\cmd;C:\Users\Admin\flutter-sdk\flutter\bin;C:\Users\Admin\AppData\Local\Programs\GitHub CLI\bin;C:\Users\Admin\.opencode\bin;C:\Go\bin;C:\Users\Admin\AppData\Local\Programs\Microsoft VS Code\bin\copilot-shim;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ripgrep;C:\Users\Admin\AppData\Local\Programs\ZCode\resources\tools\ugrep;C:\Program Files\nodejs;C:\Program Files\Git\usr\bin\vendor_perl;C:\Program Files\Git\usr\bin\core_perl;C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin'&& set PROFILE=debug&& set RUSTC='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\rustc.exe'&& set RUSTDOC='C:\Users\Admin\.rustup\toolchains\stable-x86_64-pc-windows-gnu\bin\rustdoc.exe'&& set TARGET=x86_64-pc-windows-gnu&& C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\knowledge-dock-1041ad6f98713475\build-script-build` (exit code: 101)
+  --- stdout
+  cargo:rerun-if-env-changed=TAURI_CONFIG
+  cargo:rustc-check-cfg=cfg(desktop)
+  cargo:rustc-cfg=desktop
+  cargo:rustc-check-cfg=cfg(mobile)
+  cargo:rerun-if-changed=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\tauri.conf.json
+  cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=knowledgedock
+  cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_local
+  cargo:rustc-check-cfg=cfg(dev)
+  cargo:rustc-cfg=dev
+  cargo:PERMISSION_FILES_PATH=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\target\debug\build\knowledge-dock-ca624fbda9cc69d5\out\app-manifest\__app__-permission-files
+  cargo:rerun-if-changed=C:\Users\Admin\.zcode\workspace\1794077351651-f78641b7-836a-415a-9622-c24026a7b753\knowledge-dock\src-tauri\capabilities
+  cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
+  cargo:rustc-env=TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-gnu
+  package.metadata does not exist
+warning: build failed, waiting for other jobs to finish...

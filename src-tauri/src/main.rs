@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
@@ -110,10 +110,16 @@ fn rescan(app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
 }
 
 #[tauri::command]
-async fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult, String> {
+fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let picked = app.dialog().file().pick_folder().await;
+    // dialog 插件为回调式 API，用通道转同步
+    let (tx, rx) = std::sync::mpsc::channel::<Option<tauri_plugin_dialog::FilePath>>();
+    app.dialog().file().pick_folder(move |fp| {
+        let _ = tx.send(fp);
+    });
+    let picked = rx.recv().map_err(|e| e.to_string())?;
+
     let Some(fp) = picked else {
         // 用户取消
         return Ok(PickResult { dir: None, stats: None, error: None });
@@ -169,8 +175,8 @@ fn quit_app(app: AppHandle) {
 fn save_position_throttled(app: &AppHandle, x: i32, y: i32) {
     LAST_X.store(x as i64, Ordering::Relaxed);
     LAST_Y.store(y as i64, Ordering::Relaxed);
-    let now = Instant::now()
-        .duration_since(Instant::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let last = LAST_SAVE_MS.load(Ordering::Relaxed);
@@ -238,9 +244,9 @@ fn main() {
             }
 
             // 系统托盘
-            let show = MenuItem::with_id(handle, "show", "显示窗口", true, None::<&str>)?;
-            let quit = MenuItem::with_id(handle, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(handle, &[&show, &quit])?;
+            let show = MenuItem::with_id(&handle, "show", "显示窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(&handle, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(&handle, &[&show, &quit])?;
             TrayIconBuilder::with_id("kd-tray")
                 .icon(handle.default_window_icon().expect("app icon").clone())
                 .tooltip("知识悬浮搜索")
@@ -254,7 +260,7 @@ fn main() {
                     }
                     _ => {}
                 })
-                .build(handle)?;
+                .build(&handle)?;
 
             // 启动时若已有知识库目录则后台建索引 + 监听
             if let Some(dir) = cfg.knowledge_dir.clone() {
