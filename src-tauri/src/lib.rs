@@ -427,6 +427,14 @@ pub fn run() {
             );
             let engine = Arc::new(Engine::open_or_create(&data_dir.join("index"), synonyms)?);
 
+            // 先注册全局状态（后续 setup 内的所有 state() 访问都依赖它）
+            app.manage(AppState {
+                engine,
+                cfg: Mutex::new(cfg.clone()),
+                dialog_open: AtomicBool::new(false),
+                watcher: Mutex::new(None),
+            });
+
             // 恢复窗口位置与宽度（越界则保持默认居中）
             if let Some(win) = handle.get_webview_window("main") {
                 let _ = win.set_size(tauri::LogicalSize::new(cfg.width, COLLAPSED_H));
@@ -471,12 +479,6 @@ pub fn run() {
                 start_watchers(&handle);
             }
 
-            app.manage(AppState {
-                engine,
-                cfg: Mutex::new(cfg),
-                dialog_open: AtomicBool::new(false),
-                watcher: Mutex::new(None),
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
