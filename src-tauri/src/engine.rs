@@ -303,9 +303,28 @@ impl Engine {
         self.reader.searcher().num_docs()
     }
 
-    /// 增量同步：只 stat 全部文件做 mtime 差异，**仅重读重切变更文件**（大库免全量重扫）
-    pub fn sync(&self, root: &Path) -> Result<Stats, String> {
-        let plan = indexer::scan_index_plan(root)?;
+    /// 增量同步（多知识库根聚合）：只 stat 全部文件做 mtime 差异，
+    /// **仅重读重切变更文件**（大库免全量重扫）；多根时展示路径带库名前缀
+    pub fn sync_roots(&self, roots: &[PathBuf]) -> Result<Stats, String> {
+        if roots.is_empty() {
+            return Ok(Stats { docs: 0, chunks: 0 });
+        }
+        let multi = roots.len() > 1;
+        let mut plan: Vec<indexer::FilePlan> = Vec::new();
+        for root in roots {
+            let mut ps = indexer::scan_index_plan(root)?;
+            if multi {
+                let base = root
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| root.to_string_lossy().to_string());
+                for p in &mut ps {
+                    p.rel = format!("{base}/{}", p.rel);
+                }
+            }
+            plan.append(&mut ps);
+        }
+
         let manifest_path = self.index_dir.join("manifest.json");
         let mut manifest = self.manifest.lock().expect("manifest lock");
         let first_build = manifest.is_empty() && !manifest_path.exists();
@@ -367,6 +386,11 @@ impl Engine {
         );
 
         Ok(stats)
+    }
+
+    /// 当前生效的同义词词典（默认 + 用户覆盖合并后）
+    pub fn synonyms_map(&self) -> HashMap<String, Vec<String>> {
+        self.synonyms.lock().expect("syn lock").clone()
     }
 
     fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk) {

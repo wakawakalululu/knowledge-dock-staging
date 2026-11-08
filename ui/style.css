@@ -127,6 +127,27 @@ html, body {
 /* hidden 属性必须显式压过 display:flex */
 .card-panel[hidden] { display: none; }
 
+/* 类型过滤 chips */
+.chips {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--divider);
+}
+.chip {
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: var(--btn-bg);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.chip:hover { background: var(--btn-bg-hover); color: var(--text); }
+.chip.active { background: var(--accent); color: #fff; }
+
 /* 结果列表 */
 .res-list {
   flex: 1;
@@ -259,7 +280,51 @@ html, body {
 .foot-hint { opacity: 0.75; }
 
 /* ---- 设置面板 ---- */
-#settings { padding: 14px; gap: 12px; }
+#settings {
+  padding: 14px;
+  gap: 12px;
+  overflow-y: auto;
+}
+#settings::-webkit-scrollbar { width: 6px; }
+#settings::-webkit-scrollbar-thumb { background: var(--divider); border-radius: 3px; }
+.set-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
+.set-area {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--divider);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+  min-height: 0;
+}
+.set-area:focus { border-color: var(--accent); }
+.set-area.mono { font-family: Consolas, "Courier New", monospace; }
+.mini-btn {
+  align-self: flex-start;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 12px;
+  background: var(--btn-bg);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mini-btn svg { width: 12px; height: 12px; }
+.mini-btn:hover { background: var(--btn-bg-hover); }
 .set-row {
   display: flex;
   align-items: center;

@@ -10,9 +10,12 @@ pub const DEFAULT_WIDTH: f64 = 600.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// 知识库根目录（绝对路径）
+    /// 知识库根目录（绝对路径）—— v0.3 兼容字段，等价于 knowledge_dirs 的单元素形式
     #[serde(default)]
     pub knowledge_dir: Option<String>,
+    /// 知识库根目录列表（多库混检）；为空时回退 knowledge_dir
+    #[serde(default)]
+    pub knowledge_dirs: Vec<String>,
     /// 窗口位置（物理像素），用于重启恢复
     #[serde(default)]
     pub x: Option<i32>,
@@ -27,6 +30,19 @@ pub struct Config {
     /// 全局快捷键（如 "Alt+Space"）
     #[serde(default = "default_shortcut")]
     pub shortcut: String,
+}
+
+impl Config {
+    /// 生效的知识库根目录列表：优先 knowledge_dirs，否则回退旧单目录字段
+    pub fn effective_roots(&self) -> Vec<PathBuf> {
+        if !self.knowledge_dirs.is_empty() {
+            self.knowledge_dirs.iter().map(PathBuf::from).collect()
+        } else if let Some(d) = &self.knowledge_dir {
+            vec![PathBuf::from(d)]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 fn default_width() -> f64 {
@@ -65,6 +81,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             knowledge_dir: None,
+            knowledge_dirs: Vec::new(),
             x: None,
             y: None,
             width: DEFAULT_WIDTH,

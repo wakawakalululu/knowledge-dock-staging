@@ -1,6 +1,6 @@
 {
   "name": "knowledge-dock",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "uTools 风格的本地知识库悬浮检索工具 (Tauri 2)",
   "scripts": {

@@ -14,9 +14,9 @@ mod search_tests;
 use config::Config;
 use engine::{Engine, SearchResponse};
 use indexer::Stats;
-use notify::{RecursiveMode, Watcher};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -34,6 +34,8 @@ struct AppState {
     cfg: Mutex<Config>,
     /// 原生目录选择对话框打开期间禁止失焦隐藏
     dialog_open: AtomicBool,
+    /// 文件监听句柄：替换即关闭旧通道，旧监听线程随之退出
+    watcher: Mutex<Option<RecommendedWatcher>>,
 }
 
 /// 拖动节流：窗口移动事件的保存间隔
@@ -45,14 +47,20 @@ static LAST_Y: AtomicI64 = AtomicI64::new(i64::MIN);
 #[derive(Serialize)]
 struct PickResult {
     dir: Option<String>,
+    /// 追加后的完整目录列表
+    dirs: Vec<String>,
     stats: Option<Stats>,
     error: Option<String>,
 }
 
-/// 后台执行一次同步并推送统计（首次构建/校验/增量复用同一入口）
-fn sync_and_emit(app: &AppHandle, dir: &Path) {
+/// 后台执行一次多根同步并推送统计
+fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    match state.engine.sync(dir) {
+    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    if roots.is_empty() {
+        return;
+    }
+    match state.engine.sync_roots(&roots) {
         Ok(stats) => {
             let _ = app.emit("index-updated", &stats);
         }
@@ -62,34 +70,44 @@ fn sync_and_emit(app: &AppHandle, dir: &Path) {
     }
 }
 
-/// 启动/重启文件监听线程：事件静默 900ms 后增量更新索引并推送前端
-fn start_watcher(app: &AppHandle, dir: PathBuf) {
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let Ok(mut watcher) = notify::recommended_watcher(tx) else { return };
-        if watcher.watch(&dir, RecursiveMode::Recursive).is_err() {
+/// 启动/替换文件监听：一个 watcher 监听全部知识库根；
+/// 旧 watcher 被替换后通道关闭，旧监听线程自动退出（防线程累积）
+fn start_watchers(app: &AppHandle) {
+    let state: State<AppState> = app.state();
+    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    if roots.is_empty() {
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = match notify::recommended_watcher(tx) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    for r in &roots {
+        if watcher.watch(r, RecursiveMode::Recursive).is_err() {
             return;
         }
+    }
+
+    // 泵线程：静默 900ms 后触发多根增量同步
+    let handle = app.clone();
+    std::thread::spawn(move || {
         loop {
-            // 阻塞等待首个事件；通道关闭则退出线程
+            // 通道关闭（watcher 被替换）则退出线程
             if rx.recv().is_err() {
                 return;
             }
-            // 持续吸收事件，直到静默 900ms
             loop {
                 match rx.recv_timeout(Duration::from_millis(900)) {
                     Ok(_) => continue,
                     Err(_) => break,
                 }
             }
-            let state = handle.state::<AppState>();
-            let dir_now = state.cfg.lock().expect("cfg lock").knowledge_dir.clone();
-            if let Some(d) = dir_now {
-                sync_and_emit(&handle, Path::new(&d));
-            }
+            sync_and_emit(&handle);
         }
     });
+
+    *state.watcher.lock().expect("watcher lock") = Some(watcher);
 }
 
 /// 以折叠形态显示并聚焦（打开即一条搜索框，uTools 式）
@@ -201,16 +219,14 @@ fn search(q: String, state: State<'_, AppState>) -> SearchResponse {
 
 #[tauri::command]
 fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
-    let dir = state
-        .cfg
-        .lock()
-        .expect("cfg lock")
-        .knowledge_dir
-        .clone()
-        .ok_or("尚未设置知识库目录")?;
-    state.engine.sync(Path::new(&dir))
+    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    if roots.is_empty() {
+        return Err("尚未设置知识库目录".into());
+    }
+    state.engine.sync_roots(&roots)
 }
 
+/// 追加一个知识库目录（去重），保存配置、全量同步、重建监听
 #[tauri::command]
 fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -228,29 +244,59 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
 
     let Some(fp) = picked else {
         // 用户取消
-        return Ok(PickResult { dir: None, stats: None, error: None });
+        return Ok(PickResult { dir: None, dirs: Vec::new(), stats: None, error: None });
     };
     let Some(path) = fp.as_path() else {
-        return Ok(PickResult { dir: None, stats: None, error: Some("路径无效".into()) });
+        return Ok(PickResult { dir: None, dirs: Vec::new(), stats: None, error: Some("路径无效".into()) });
     };
     let dir_str = path.to_string_lossy().to_string();
 
-    match state.engine.sync(path) {
-        Ok(stats) => {
-            {
-                let mut cfg = state.cfg.lock().expect("cfg lock");
-                cfg.knowledge_dir = Some(dir_str.clone());
-                config::save(&app, &cfg);
-            }
-            start_watcher(&app, path.to_path_buf());
-            Ok(PickResult { dir: Some(dir_str), stats: Some(stats), error: None })
+    {
+        let mut cfg = state.cfg.lock().expect("cfg lock");
+        if !cfg.knowledge_dirs.contains(&dir_str) {
+            cfg.knowledge_dirs.push(dir_str.clone());
         }
-        Err(e) => Ok(PickResult { dir: None, stats: None, error: Some(e) }),
+        if cfg.knowledge_dir.is_none() {
+            cfg.knowledge_dir = Some(dir_str.clone());
+        }
+        config::save(&app, &cfg);
     }
+
+    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    let stats = state.engine.sync_roots(&roots).ok();
+    start_watchers(&app);
+    let dirs = state.cfg.lock().expect("cfg lock").knowledge_dirs.clone();
+    Ok(PickResult { dir: Some(dir_str), dirs, stats, error: None })
+}
+
+/// 当前生效的同义词词典 JSON（默认 + 用户覆盖合并后）
+#[tauri::command]
+fn get_synonyms(state: State<'_, AppState>) -> String {
+    let map = state.engine.synonyms_map();
+    serde_json::to_string_pretty(&map).unwrap_or_else(|_| "{}".into())
+}
+
+/// 保存用户同义词词典：JSON 校验 → 写配置目录 → 引擎热重载
+#[tauri::command]
+fn save_synonyms(app: AppHandle, text: String) -> Result<(), String> {
+    let map: HashMap<String, Vec<String>> = serde_json::from_str(&text)
+        .map_err(|e| format!("JSON 格式错误: {e}"))?;
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("synonyms.json"), serde_json::to_string_pretty(&map).unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    // 热重载：用户文件覆盖默认词典（load_synonyms 会再做双向对称）
+    let merged = engine::load_synonyms(Some(&dir));
+    let state: State<AppState> = app.state();
+    state.engine.reload_synonyms(merged);
+    Ok(())
 }
 
 /// 就地展开上下文：读取源文件命中块前 N 行 + 后 M 行（不打开源文件）
-/// 安全：仅允许读取知识库目录内的文件
+/// 安全：仅允许读取任一知识库根目录内的文件
 #[tauri::command]
 fn expand_context(
     path: String,
@@ -259,16 +305,16 @@ fn expand_context(
     after: usize,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let knowledge_dir = state
-        .cfg
-        .lock()
-        .expect("cfg lock")
-        .knowledge_dir
-        .clone()
-        .ok_or("尚未设置知识库目录")?;
-    let canon_root = std::fs::canonicalize(&knowledge_dir).map_err(|e| e.to_string())?;
+    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    if roots.is_empty() {
+        return Err("尚未设置知识库目录".into());
+    }
     let canon_path = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
-    if !canon_path.starts_with(&canon_root) {
+    let allowed = roots
+        .iter()
+        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .any(|root| canon_path.starts_with(&root));
+    if !allowed {
         return Err("路径不在知识库目录内".into());
     }
 
@@ -419,20 +465,17 @@ pub fn run() {
                 let _ = apply_shortcut(&handle, config::DEFAULT_SHORTCUT);
             }
 
-            // 后台校验/构建索引（已建好则秒过），并挂文件监听
-            if let Some(dir) = cfg.knowledge_dir.clone() {
-                let h2 = handle.clone();
-                let d2 = dir.clone();
-                std::thread::spawn(move || {
-                    sync_and_emit(&h2, Path::new(&d2));
-                });
-                start_watcher(&handle, PathBuf::from(&dir));
+            // 后台校验/构建索引（已建好则 stat 秒过），并挂多根文件监听
+            if !cfg.effective_roots().is_empty() {
+                sync_and_emit(&handle);
+                start_watchers(&handle);
             }
 
             app.manage(AppState {
                 engine,
                 cfg: Mutex::new(cfg),
                 dialog_open: AtomicBool::new(false),
+                watcher: Mutex::new(None),
             });
             Ok(())
         })
@@ -444,6 +487,8 @@ pub fn run() {
             rescan,
             pick_folder,
             expand_context,
+            get_synonyms,
+            save_synonyms,
             open_file,
             reveal_file,
             hide_window,
