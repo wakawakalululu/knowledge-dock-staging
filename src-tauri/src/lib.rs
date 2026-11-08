@@ -250,9 +250,29 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
 }
 
 /// 就地展开上下文：读取源文件命中块前 N 行 + 后 M 行（不打开源文件）
+/// 安全：仅允许读取知识库目录内的文件
 #[tauri::command]
-fn expand_context(path: String, line: usize, before: usize, after: usize) -> Result<String, String> {
-    let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
+fn expand_context(
+    path: String,
+    line: usize,
+    before: usize,
+    after: usize,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let knowledge_dir = state
+        .cfg
+        .lock()
+        .expect("cfg lock")
+        .knowledge_dir
+        .clone()
+        .ok_or("尚未设置知识库目录")?;
+    let canon_root = std::fs::canonicalize(&knowledge_dir).map_err(|e| e.to_string())?;
+    let canon_path = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    if !canon_path.starts_with(&canon_root) {
+        return Err("路径不在知识库目录内".into());
+    }
+
+    let raw = std::fs::read(&canon_path).map_err(|e| e.to_string())?;
     let content = String::from_utf8_lossy(&raw);
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {

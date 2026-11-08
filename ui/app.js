@@ -10,6 +10,7 @@ const $btnClear = document.getElementById("btn-clear");
 const $results = document.getElementById("results");
 const $resList = document.getElementById("res-list");
 const $stats = document.getElementById("stats");
+const $resCount = document.getElementById("res-count");
 const $settings = document.getElementById("settings");
 const $cfgDir = document.getElementById("cfg-dir");
 const $setShortcut = document.getElementById("set-shortcut");
@@ -75,6 +76,8 @@ function applyPin() {
 
 /* ---------- 渲染 ---------- */
 function render(query) {
+  // 结果计数
+  $resCount.textContent = hits.length ? `${hits.length} 条结果` : "";
   if (!hits.length) {
     $resList.innerHTML =
       '<div class="empty">' +
@@ -175,6 +178,8 @@ async function doSearch() {
     hits = [];
     active = -1;
     lastTerms = [];
+    ctxCache = {};
+    ctxOpen = {};
     updateView();
     return;
   }
@@ -187,6 +192,9 @@ async function doSearch() {
     lastTerms = [];
     console.error(e);
   }
+  // 新结果集：上下文缓存必须清空，否则命中序号错位会显示旧内容
+  ctxCache = {};
+  ctxOpen = {};
   active = hits.length ? 0 : -1;
   render(query);
 }
@@ -197,6 +205,8 @@ function clearInput() {
   hits = [];
   active = -1;
   lastTerms = [];
+  ctxCache = {};
+  ctxOpen = {};
   updateView();
 }
 
@@ -313,7 +323,7 @@ document.getElementById("btn-quit").addEventListener("click", () => invoke("quit
 /* 索引变更（文件监听触发）→ 刷新统计并重跑当前搜索 */
 listen("index-updated", (ev) => {
   const s = ev.payload;
-  $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个片段`;
+  $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
   if ($q.value.trim()) doSearch();
 });
 
@@ -324,6 +334,8 @@ listen("ui-reset", () => {
   hits = [];
   active = -1;
   lastTerms = [];
+  ctxCache = {};
+  ctxOpen = {};
   settingsOpen = false;
   updateView();
   $q.focus();

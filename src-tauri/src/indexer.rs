@@ -116,11 +116,29 @@ fn is_law(content: &str) -> bool {
     content.lines().filter(|l| re_article().is_match(l)).count() >= 2
 }
 
-pub fn scan_folder(root: &Path) -> Result<Vec<DocumentChunk>, String> {
+/// 待索引文件清单（只 stat 不读内容，供增量同步做 mtime 差异）
+#[derive(Debug, Clone)]
+pub struct FilePlan {
+    pub rel: String,
+    pub abs: String,
+    pub mtime: u64,
+}
+
+pub fn mtime_ms(p: &Path) -> u64 {
+    p.metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 扫描目录，产出合格文件的清单（不读取文件内容）
+pub fn scan_index_plan(root: &Path) -> Result<Vec<FilePlan>, String> {
     if !root.is_dir() {
         return Err(format!("目录不存在: {}", root.display()));
     }
-    let mut all = Vec::new();
+    let mut plans = Vec::new();
     for entry in WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| e.depth() == 0 || !is_ignored_dir(&e.file_name().to_string_lossy()))
@@ -139,35 +157,46 @@ pub fn scan_folder(root: &Path) -> Result<Vec<DocumentChunk>, String> {
         if entry.metadata().map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true) {
             continue;
         }
-        let raw = match std::fs::read(entry.path()) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let content = String::from_utf8_lossy(&raw).into_owned();
-        let stem = entry
-            .path()
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let title = extract_title(&content, &stem);
+        let abs = entry.path().to_string_lossy().to_string();
         let rel = entry
             .path()
             .strip_prefix(root)
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
-        let abs = entry.path().to_string_lossy().to_string();
+        let mtime = mtime_ms(entry.path());
+        plans.push(FilePlan { rel, abs, mtime });
+    }
+    Ok(plans)
+}
 
-        let chunks = if is_law(&content) {
-            chunk_law(&content, &title, &rel, &abs)
-        } else if count_qa_pairs(&content) >= 2 {
-            chunk_qa(&content, &title, &rel, &abs)
-        } else if rel.to_lowercase().ends_with(".md") || rel.to_lowercase().ends_with(".markdown") {
-            chunk_markdown(&content, &title, &rel, &abs)
-        } else {
-            chunk_plain(&content, &title, &rel, &abs)
-        };
-        all.extend(chunks);
+/// 单文件读取 + 分类切块（增量同步只对变更文件调用）
+pub fn chunk_file(abs: &Path, rel: &str) -> Vec<DocumentChunk> {
+    let Ok(raw) = std::fs::read(abs) else { return Vec::new() };
+    let content = String::from_utf8_lossy(&raw).into_owned();
+    let stem = abs
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let title = extract_title(&content, &stem);
+    let abs_str = abs.to_string_lossy().to_string();
+
+    if is_law(&content) {
+        chunk_law(&content, &title, rel, &abs_str)
+    } else if count_qa_pairs(&content) >= 2 {
+        chunk_qa(&content, &title, rel, &abs_str)
+    } else if rel.to_lowercase().ends_with(".md") || rel.to_lowercase().ends_with(".markdown") {
+        chunk_markdown(&content, &title, rel, &abs_str)
+    } else {
+        chunk_plain(&content, &title, rel, &abs_str)
+    }
+}
+
+/// 全量扫描（测试/验证工具用）：清单 + 逐文件切块
+pub fn scan_folder(root: &Path) -> Result<Vec<DocumentChunk>, String> {
+    let mut all = Vec::new();
+    for p in scan_index_plan(root)? {
+        all.extend(chunk_file(Path::new(&p.abs), &p.rel));
     }
     Ok(all)
 }

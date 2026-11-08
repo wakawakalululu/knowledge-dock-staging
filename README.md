@@ -63,7 +63,7 @@ cd tooling/search-verify && cargo run              # 检索引擎端到端验证
 每次 push 到 `main`，Actions 上传 artifact `knowledge-dock-windows`：
 
 - `knowledge-dock-portable.exe` —— 免安装，双击即用
-- `knowledge-dock_0.3.0_x64-setup.exe` —— NSIS 安装包
+- `knowledge-dock_0.3.1_x64-setup.exe` —— NSIS 安装包
 
 推送 `v*` 标签时自动创建 GitHub Release 并附以上产物；也可在 Actions 页手动触发并填版本号发版。
 

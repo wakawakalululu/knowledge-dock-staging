@@ -9,14 +9,23 @@ use jieba_rs::Jieba;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
 use tantivy::query::{BooleanQuery, BoostQuery, Occur, QueryParser};
 use tantivy::schema::{
     Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions, Value,
 };
-use tantivy::tokenizer::{Token, TokenStream, Tokenizer, TokenizerManager};
+use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+
+/// 查询停用词：泛词在 OR 语义下只会引入噪声候选（BM25 的 IDF 已缓解，这里直接剔除）
+const STOPWORDS: &[&str] = &[
+    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也",
+    "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那",
+    "怎么", "如何", "什么", "为什么", "请问", "哪些", "一下", "关于", "怎么办", "需要", "可以",
+    "应该", "如果", "因为", "所以", "还是", "以及", "对于", "根据", "通过", "进行", "使用",
+    "相关", "情况", "问题",
+];
 
 // ---------------- jieba 分词器接入 Tantivy ----------------
 
@@ -28,6 +37,10 @@ pub struct JiebaTokenizer {
 impl JiebaTokenizer {
     pub fn new() -> Self {
         JiebaTokenizer { jieba: Arc::new(Jieba::new()) }
+    }
+    /// 与查询侧共享同一分词实例（省一份词典内存）
+    pub fn with_jieba(jieba: Arc<Jieba>) -> Self {
+        JiebaTokenizer { jieba }
     }
 }
 
@@ -160,24 +173,23 @@ struct Fields {
     line: Field,
 }
 
+/// 缓存的查询解析器（schema/分词器固定，无需每次按键重建）
+struct Parsers {
+    title: QueryParser,
+    content: QueryParser,
+    breadcrumbs: QueryParser,
+}
+
 pub struct Engine {
     index_dir: PathBuf,
     reader: IndexReader,
     writer: Mutex<IndexWriter>,
-    tokenizers: TokenizerManager,
+    jieba: Arc<Jieba>,
+    parsers: Parsers,
     fields: Fields,
     /// abs -> [mtime_ms, chunk_count]
     manifest: Mutex<HashMap<String, [u64; 2]>>,
     synonyms: Mutex<HashMap<String, Vec<String>>>,
-}
-
-fn mtime_ms(p: &Path) -> u64 {
-    p.metadata()
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 impl Engine {
@@ -243,8 +255,9 @@ impl Engine {
             idx
         };
 
-        // 分词器注册（索引与查询共用）
-        index.tokenizers().register(TOKENIZER_NAME, JiebaTokenizer::new());
+        // 分词器注册（索引与查询共用同一 jieba 实例）
+        let jieba = Arc::new(Jieba::new());
+        index.tokenizers().register(TOKENIZER_NAME, JiebaTokenizer::with_jieba(jieba.clone()));
 
         let writer = index
             .writer(30_000_000) // 30MB 内存预算，个人库绰绰有余
@@ -254,6 +267,13 @@ impl Engine {
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()
             .map_err(|e: tantivy::TantivyError| e.to_string())?;
+
+        // 缓存查询解析器（OR 语义；标题/面包屑/正文三字段）
+        let parsers = Parsers {
+            title: QueryParser::new(schema.clone(), vec![title], index.tokenizers().clone()),
+            content: QueryParser::new(schema.clone(), vec![content], index.tokenizers().clone()),
+            breadcrumbs: QueryParser::new(schema.clone(), vec![breadcrumbs], index.tokenizers().clone()),
+        };
 
         // 恢复清单（损坏则视为空，触发全量重建）
         let manifest_path = index_dir.join("manifest.json");
@@ -266,7 +286,8 @@ impl Engine {
             index_dir: index_dir.to_path_buf(),
             reader,
             writer: Mutex::new(writer),
-            tokenizers: index.tokenizers().clone(),
+            jieba,
+            parsers,
             fields: Fields { path, rel, title, content, breadcrumbs, doc_type, line },
             manifest: Mutex::new(manifest),
             synonyms: Mutex::new(synonyms),
@@ -282,51 +303,42 @@ impl Engine {
         self.reader.searcher().num_docs()
     }
 
-    /// 按文件 mtime 差异做增量同步：删除失效/变更文件的旧文档，重建变更文件
+    /// 增量同步：只 stat 全部文件做 mtime 差异，**仅重读重切变更文件**（大库免全量重扫）
     pub fn sync(&self, root: &Path) -> Result<Stats, String> {
-        let chunks = indexer::scan_folder(root)?;
-        let mut current: HashMap<String, (u64, usize)> = HashMap::new(); // abs -> (mtime, chunk_count)
-        for c in &chunks {
-            let e = current.entry(c.abs.clone()).or_insert((0, 0));
-            e.0 = mtime_ms(Path::new(&c.abs));
-            e.1 += 1;
-        }
-
+        let plan = indexer::scan_index_plan(root)?;
         let manifest_path = self.index_dir.join("manifest.json");
         let mut manifest = self.manifest.lock().expect("manifest lock");
         let first_build = manifest.is_empty() && !manifest_path.exists();
 
-        let mut by_abs: HashMap<&str, Vec<&DocumentChunk>> = HashMap::new();
-        for c in &chunks {
-            by_abs.entry(c.abs.as_str()).or_default().push(c);
-        }
-
         let mut writer = self.writer.lock().expect("writer lock");
-        // 变更/删除集合：mtime 变化、清单缺失、文件被移除
-        let mut touched: HashSet<String> = HashSet::new();
-        for (abs, (mtime, _)) in &current {
-            if manifest.get(abs).map(|m| m[0]) != Some(*mtime) {
-                touched.insert(abs.clone());
-            }
-        }
-        for abs in manifest.keys() {
-            if !current.contains_key(abs) {
-                touched.insert(abs.clone());
-            }
-        }
 
-        if first_build || !touched.is_empty() {
-            // 逐文件删除旧文档
-            for abs in &touched {
-                let term = Term::from_field_text(self.fields.path, abs);
-                writer.delete_term(term);
+        // 差异集合：mtime 变化/新文件 → touched；清单里有但磁盘没了 → removed
+        let plan_abs: HashSet<&String> = plan.iter().map(|p| &p.abs).collect();
+        let touched: Vec<&indexer::FilePlan> = plan
+            .iter()
+            .filter(|p| manifest.get(&p.abs).map(|m| m[0]) != Some(p.mtime))
+            .collect();
+        let removed: Vec<String> = manifest
+            .keys()
+            .filter(|a| !plan_abs.contains(a))
+            .cloned()
+            .collect();
+
+        let mut chunk_counts: HashMap<String, u64> = HashMap::new();
+        if first_build || !touched.is_empty() || !removed.is_empty() {
+            // 删除：移除文件 + 变更文件的旧文档
+            for abs in &removed {
+                writer.delete_term(Term::from_field_text(self.fields.path, abs));
             }
-            // 重建变更文件
-            for abs in &touched {
-                if let Some(list) = by_abs.get(abs.as_str()) {
-                    for c in list {
-                        self.add_doc(&mut writer, c);
-                    }
+            for p in &touched {
+                writer.delete_term(Term::from_field_text(self.fields.path, &p.abs));
+            }
+            // 重建：仅变更文件重新读取切块
+            for p in &touched {
+                let chunks = indexer::chunk_file(Path::new(&p.abs), &p.rel);
+                chunk_counts.insert(p.abs.clone(), chunks.len() as u64);
+                for c in &chunks {
+                    self.add_doc(&mut writer, c);
                 }
             }
             writer.commit().map_err(|e| e.to_string())?;
@@ -334,16 +346,27 @@ impl Engine {
             self.reader.reload().map_err(|e| e.to_string())?;
         }
 
-        *manifest = current
-            .iter()
-            .map(|(k, (m, n))| (k.clone(), [*m, *n as u64]))
-            .collect();
+        // 更新清单：未变更文件沿用原计数
+        let mut new_manifest: HashMap<String, [u64; 2]> = HashMap::with_capacity(plan.len());
+        for p in &plan {
+            let entry = if chunk_counts.contains_key(&p.abs) {
+                [p.mtime, chunk_counts[&p.abs]]
+            } else {
+                *manifest.get(&p.abs).unwrap_or(&[p.mtime, 0])
+            };
+            new_manifest.insert(p.abs.clone(), entry);
+        }
+        let stats = Stats {
+            docs: new_manifest.len(),
+            chunks: new_manifest.values().map(|m| m[1] as usize).sum(),
+        };
+        *manifest = new_manifest;
         let _ = std::fs::write(
             &manifest_path,
             serde_json::to_string(&*manifest).unwrap_or_else(|_| "{}".into()),
         );
 
-        Ok(Stats { docs: manifest.len(), chunks: chunks.len() })
+        Ok(stats)
     }
 
     fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk) {
@@ -375,26 +398,30 @@ impl Engine {
             return SearchResponse { hits: Vec::new(), terms: Vec::new() };
         }
 
-        // 1. jieba 分词（复用 tokenizer 内部 jieba：新建轻量实例亦可，词典载入一次成本可忽略）
-        static JIEBA: OnceLock<Jieba> = OnceLock::new();
-        let jieba = JIEBA.get_or_init(Jieba::new);
+        // 1. jieba 分词 + 词元清洗：仅保留字母数字（和数字上下文的 . -），剔除中英文标点
         let mut terms: Vec<String> = Vec::new();
-        for t in jieba.cut(q, false) {
-            let t = t.trim();
-            if t.is_empty() {
-                continue;
-            }
+        for t in self.jieba.cut(q, false) {
             let cleaned: String = t
                 .chars()
-                .filter(|c| c.is_alphanumeric() || !c.is_ascii_punctuation())
+                .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-')
                 .collect();
-            if cleaned.is_empty() {
+            if !cleaned.chars().any(|c| c.is_alphanumeric()) {
                 continue;
             }
             let lower = cleaned.to_lowercase();
             if !terms.contains(&lower) {
                 terms.push(lower);
             }
+        }
+        // 2. 停用词过滤（若全部被滤掉则回退原始分词，避免把"怎么办"这类查询变成空查询）
+        let filtered: Vec<String> = terms
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|t| !STOPWORDS.contains(t))
+            .map(|t| t.to_string())
+            .collect();
+        if !filtered.is_empty() {
+            terms = filtered;
         }
         if terms.is_empty() {
             return SearchResponse { hits: Vec::new(), terms: Vec::new() };
@@ -424,47 +451,11 @@ impl Engine {
         }
         drop(dict);
 
-        // 3. 构造查询：默认 OR 语义（同义词展开按用户设计为并集，BM25 负责排序）
-        let searcher = self.reader.searcher();
-        let schema = searcher.schema().clone();
-        let title_parser =
-            QueryParser::new(schema.clone(), vec![self.fields.title], self.tokenizers.clone());
-        let content_parser =
-            QueryParser::new(schema.clone(), vec![self.fields.content], self.tokenizers.clone());
-        // 面包屑可搜：章节/条号（如"第四十四条"）直达答案
-        let bc_parser =
-            QueryParser::new(schema.clone(), vec![self.fields.breadcrumbs], self.tokenizers.clone());
-
-        let build = |parser: &QueryParser| -> Option<Box<dyn tantivy::query::Query>> {
-            let joined = effective
-                .iter()
-                .map(|t| t.replace(['\\', '"', '(', ')', '^', '~', ':'], ""))
-                .filter(|t| !t.is_empty())
-                .map(|t| format!("{t}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            if joined.is_empty() {
-                return None;
-            }
-            match parser.parse_query(&joined) {
-                Ok(q) => Some(q),
-                Err(e) => {
-                    #[cfg(debug_assertions)]
-                    eprintln!("[engine] parse_query 失败({e})，尝试加引号兜底: {joined}");
-                    // 兜底：逐词加引号
-                    let quoted = effective
-                        .iter()
-                        .map(|t| format!("\"{}\"", t.replace('"', "")))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    parser.parse_query(&quoted).ok()
-                }
-            }
-        };
-
-        let title_q = build(&title_parser);
-        let content_q = build(&content_parser);
-        let bc_q = build(&bc_parser);
+        // 4. 构造查询：默认 OR 语义（同义词展开按用户设计为并集，BM25 负责排序）
+        //    解析器已缓存，无需每次按键重建
+        let title_q = build(&self.parsers.title, &effective);
+        let content_q = build(&self.parsers.content, &effective);
+        let bc_q = build(&self.parsers.breadcrumbs, &effective);
         let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
         if let Some(q) = title_q {
             clauses.push((Occur::Should, Box::new(BoostQuery::new(q, 2.0))));
@@ -480,7 +471,8 @@ impl Engine {
         }
         let query = BooleanQuery::new(clauses);
 
-        // 4. 检索
+        // 5. 检索
+        let searcher = self.reader.searcher();
         let top = match searcher.search(&query, &TopDocs::with_limit(limit)) {
             Ok(t) => t,
             Err(_) => return SearchResponse { hits: Vec::new(), terms: effective },
@@ -521,6 +513,32 @@ impl Engine {
             });
         }
         SearchResponse { hits, terms: effective }
+    }
+}
+
+/// 用同义词展开后的词表构造单字段 OR 查询（解析失败时逐词加引号兜底）
+fn build(parser: &QueryParser, effective: &[String]) -> Option<Box<dyn tantivy::query::Query>> {
+    let joined = effective
+        .iter()
+        .map(|t| t.replace(['\\', '"', '(', ')', '^', '~', ':'], ""))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if joined.is_empty() {
+        return None;
+    }
+    match parser.parse_query(&joined) {
+        Ok(q) => Some(q),
+        Err(e) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[engine] parse_query 失败({e})，尝试加引号兜底: {joined}");
+            let quoted = effective
+                .iter()
+                .map(|t| format!("\"{}\"", t.replace('"', "")))
+                .collect::<Vec<_>>()
+                .join(" ");
+            parser.parse_query(&quoted).ok()
+        }
     }
 }
 
