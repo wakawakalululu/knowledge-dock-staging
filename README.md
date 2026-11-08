@@ -9,7 +9,7 @@ uTools 风格的本地知识库检索工具：一条**常驻置顶**的极简搜
 - **jieba 中文分词**：自定义 Tokenizer 接入 Tantivy，索引与查询同源分词
 - **同义词查询改写**：内嵌静态词典（`src-tauri/assets/synonyms.json`，可在配置目录 `synonyms.json` 覆盖扩展）。输入"辞职"自动扩展"离职 OR 辞退 OR 解雇"，零网络、零模型
 - **上下文就地展开**：结果卡片上的展开按钮，直接读取源文件前 10 行 + 后 20 行，不开源文件即可阅读完整上下文
-- **持久化索引**：Tantivy 索引落盘 `%APPDATA%/com.local.knowledgedock/index`，启动 mmap 秒开；文件变更按 mtime 差异增量更新（delete_by_term + add），不整库重建
+- **持久化索引**：Tantivy 索引落盘 `%APPDATA%/com.local.knowledgedock/index`，启动 mmap 秒开；文件变更按 mtime 差异增量更新（delete_term + add），不整库重建
 
 ## 功能
 
@@ -71,7 +71,7 @@ cd tooling/search-verify && cargo run              # 检索引擎端到端验证
 
 1. 按 `Alt+Space` 唤起搜索框
 2. 首次使用：点击搜索条右侧「设置」→「选择文件夹…」指向你的知识库（法规 TXT、Markdown 手册、问答库均可混放）
-3. 输入关键词即搜，BM25 把最像"答案"的知识块排最前；点卡片右下的展开按钮阅读上下文
+3. 输入关键词即搜，BM25 把最像"答案"的知识块排最前；点卡片右侧展开按钮阅读上下文
 4. `Esc` 清空输入，再按 `Esc`（或点击其他窗口）隐藏；`Alt+Space` 随时唤回
 
 ## 目录结构
