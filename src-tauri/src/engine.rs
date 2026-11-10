@@ -11,8 +11,8 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery};
+use tantivy::collector::{Count, TopDocs};
+use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions, Value,
 };
@@ -132,6 +132,13 @@ pub struct SearchResponse {
     pub hits: Vec<Hit>,
     /// 实际参与匹配的词（含同义词展开），供前端高亮
     pub terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StatsDetail {
+    pub by_type: HashMap<String, u64>,
+    pub by_root: HashMap<String, u64>,
+    pub total_docs: u64,
 }
 
 // ---------------- 同义词典 ----------------
@@ -457,6 +464,39 @@ impl Engine {
         let manifest = self.manifest.lock().expect("manifest lock");
         let chunks: u64 = manifest.values().map(|m| m[1]).sum();
         Stats { docs: manifest.len(), chunks: chunks as usize }
+    }
+
+    /// 索引统计仪表盘：各类型/各库块数分布
+    pub fn stats_detail(&self) -> StatsDetail {
+        let searcher = self.reader.searcher();
+        let total = searcher.num_docs();
+
+        let by_type: HashMap<String, u64> = ["Law", "Manual", "QA", "Note"]
+            .iter()
+            .map(|t| {
+                let term = Term::from_field_text(self.fields.doc_type, t);
+                let q = TermQuery::new(term, IndexRecordOption::Basic);
+                let count = searcher.search(&q, &Count).unwrap_or(0) as u64;
+                (t.to_string(), count)
+            })
+            .collect();
+
+        let mut by_root: HashMap<String, u64> = HashMap::new();
+        let all_q = AllQuery;
+        let all_top = searcher
+            .search(&all_q, &TopDocs::with_limit(100_000))
+            .unwrap_or_default();
+        for (_, addr) in all_top {
+            if let Ok(d) = searcher.doc::<TantivyDocument>(addr) {
+                if let Some(v) = d.get_first(self.fields.root) {
+                    if let Some(s) = v.as_str() {
+                        *by_root.entry(s.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        StatsDetail { by_type, by_root, total_docs: total }
     }
 
     /// BM25 检索：分词 → 停用词 → 同义词展开 → 标题/面包屑加权

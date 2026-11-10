@@ -13,7 +13,7 @@ pub mod indexer;
 mod search_tests;
 
 use config::Config;
-use engine::{Engine, SearchResponse};
+use engine::{Engine, SearchResponse, StatsDetail};
 use indexer::Stats;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -253,6 +253,12 @@ fn clear_search_history(app: AppHandle, state: State<'_, AppState>) {
     state.cfg.lock().expect("cfg lock").search_history.clear();
     let cfg = state.cfg.lock().expect("cfg lock").clone();
     config::save(&app, &cfg);
+}
+
+/// 索引统计仪表盘：各类型/各库块数分布
+#[tauri::command]
+fn get_index_stats(state: State<'_, AppState>) -> StatsDetail {
+    state.engine.stats_detail()
 }
 
 #[tauri::command]
@@ -588,6 +594,7 @@ pub fn run() {
             add_search_history,
             get_search_history,
             clear_search_history,
+            get_index_stats,
             rescan,
             pick_folder,
             expand_context,
