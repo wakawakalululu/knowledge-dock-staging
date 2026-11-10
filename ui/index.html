@@ -13,7 +13,7 @@
       <span class="s-icon" data-tauri-drag-region>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       </span>
-      <input id="q" type="text" placeholder="搜索知识库…" autocomplete="off" spellcheck="false" />
+      <input id="q" type="text" placeholder="搜索知识库，@法律/@库名 可限定范围" autocomplete="off" spellcheck="false" />
       <button id="btn-clear" class="clear-btn" hidden title="清空">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
@@ -25,13 +25,14 @@
 
     <!-- 结果面板：有输入时向下展开 -->
     <div id="results" class="card-panel" hidden>
-      <div class="chips" id="chips">
+      <div class="chips" id="chips-type">
         <button class="chip active" data-f="all">全部</button>
         <button class="chip" data-f="Law">法律</button>
         <button class="chip" data-f="Manual">文档</button>
         <button class="chip" data-f="QA">问答</button>
         <button class="chip" data-f="Note">笔记</button>
       </div>
+      <div class="chips" id="chips-root"></div>
       <div id="res-list" class="res-list"></div>
       <div class="res-foot">
         <span id="res-count"></span>
@@ -40,38 +41,57 @@
       </div>
     </div>
 
-    <!-- 设置面板：纯前端 DOM，无原生窗口 -->
+    <!-- 设置面板：分区 Tabs，纯前端 DOM，无原生窗口 -->
     <div id="settings" class="card-panel" hidden>
-      <div class="set-col">
-        <span class="lbl">知识库目录（每行一个，多库混检）</span>
-        <textarea id="set-dirs" class="set-area" rows="3" spellcheck="false" placeholder="C:\notes&#10;D:\laws"></textarea>
-        <button id="btn-pick" class="mini-btn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
-          选择并添加目录…
-        </button>
+      <div class="tabs" id="settings-tabs">
+        <button class="tab active" data-tab="scope">范围</button>
+        <button class="tab" data-tab="general">通用</button>
+        <button class="tab" data-tab="synonyms">同义词</button>
       </div>
-      <div class="set-btns">
-        <button id="btn-rescan">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-          重新扫描全部
-        </button>
+
+      <div class="tab-pane" id="tab-scope">
+        <div class="set-col">
+          <span class="lbl-line">知识库（显示名 / 启用；输入 @名 可只在库内搜索）</span>
+          <div id="roots-list"></div>
+          <button id="btn-pick" class="mini-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            选择并添加目录…
+          </button>
+        </div>
+        <div class="set-col">
+          <span class="lbl-line">排除规则（每行一条：目录用 dir/，文件用 *.tmp.md 或相对路径）</span>
+          <textarea id="set-excludes" class="set-area mono" rows="2" spellcheck="false" placeholder="草稿/&#10;*.tmp.md"></textarea>
+          <div class="set-row">
+            <span class="lbl">扩展名</span>
+            <input id="set-exts" class="set-input" placeholder="md, markdown, txt" spellcheck="false" />
+            <span class="lbl">上限 KB</span>
+            <input id="set-maxkb" class="set-input" type="number" min="64" step="64" />
+          </div>
+        </div>
       </div>
-      <div class="set-row">
-        <span class="lbl">全局快捷键</span>
-        <input id="set-shortcut" class="set-input" type="text" placeholder="Alt+Space" spellcheck="false" />
+
+      <div class="tab-pane" id="tab-general" hidden>
+        <div class="set-row">
+          <span class="lbl">全局快捷键</span>
+          <input id="set-shortcut" class="set-input" type="text" placeholder="Alt+Space" spellcheck="false" />
+        </div>
+        <div class="set-row">
+          <span class="lbl">宽度 (px)</span>
+          <input id="set-width" class="set-input" type="number" min="320" max="1600" step="20" />
+        </div>
+        <label class="set-row check">
+          <input id="set-pin" type="checkbox" />
+          <span>钉住模式（始终显示，禁止拖动）</span>
+        </label>
       </div>
-      <div class="set-row">
-        <span class="lbl">宽度 (px)</span>
-        <input id="set-width" class="set-input" type="number" min="320" max="1600" step="20" />
+
+      <div class="tab-pane" id="tab-synonyms" hidden>
+        <div class="set-col">
+          <span class="lbl-line">同义词词典（JSON：词 → 数组，双向生效，保存即热重载）</span>
+          <textarea id="set-synonyms" class="set-area mono" rows="8" spellcheck="false" placeholder='{ "辞职": ["离职", "解雇"] }'></textarea>
+        </div>
       </div>
-      <label class="set-row check">
-        <input id="set-pin" type="checkbox" />
-        <span>钉住模式（始终显示，禁止拖动）</span>
-      </label>
-      <div class="set-col">
-        <span class="lbl">同义词词典（JSON：词 → 数组，双向生效）</span>
-        <textarea id="set-synonyms" class="set-area mono" rows="6" spellcheck="false" placeholder='{ "辞职": ["离职", "解雇"] }'></textarea>
-      </div>
+
       <div class="set-btns">
         <button id="btn-apply">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg>

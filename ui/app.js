@@ -8,30 +8,46 @@ const $q = document.getElementById("q");
 const $bar = document.getElementById("bar");
 const $btnClear = document.getElementById("btn-clear");
 const $results = document.getElementById("results");
-const $chips = document.getElementById("chips");
+const $chipsType = document.getElementById("chips-type");
+const $chipsRoot = document.getElementById("chips-root");
 const $resList = document.getElementById("res-list");
 const $stats = document.getElementById("stats");
 const $resCount = document.getElementById("res-count");
 const $settings = document.getElementById("settings");
+const $settingsTabs = document.getElementById("settings-tabs");
+const $rootsList = document.getElementById("roots-list");
 const $setDirs = document.getElementById("set-dirs");
+const $setExcludes = document.getElementById("set-excludes");
+const $setExts = document.getElementById("set-exts");
+const $setMaxkb = document.getElementById("set-maxkb");
 const $setShortcut = document.getElementById("set-shortcut");
 const $setWidth = document.getElementById("set-width");
 const $setPin = document.getElementById("set-pin");
 const $setSynonyms = document.getElementById("set-synonyms");
 
-let hits = [];            // 当前搜索结果（全量）
+let hits = [];            // 当前搜索结果（全量，范围已下沉引擎）
 let active = -1;          // 键盘选中的位置（visible 内下标）
 let debounceTimer = null;
 let cfg = null;           // 主进程下发的配置
 let settingsOpen = false; // 设置面板展开状态
+let settingsTab = "scope";
 let expanded = false;     // 当前窗口形态（与后端同步）
 let lastTerms = [];       // 实际参与匹配的词（含同义词展开），用于高亮
+let lastQuery = "";       // 剥离 @前缀 后的实际检索词（高亮/展开复渲用）
 let ctxCache = {};        // 命中项上下文缓存: 原始下标 -> string
 let ctxOpen = {};         // 命中项上下文展开状态
-let typeFilter = "all";   // 类型过滤：all | Law | Manual | QA | Note
+let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下沉引擎）
+let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
 
 const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
+const TYPE_ALIAS = {
+  law: "Law", 法律: "Law", legal: "Law",
+  manual: "Manual", 文档: "Manual", doc: "Manual",
+  qa: "QA", 问答: "QA",
+  note: "Note", 笔记: "Note",
+  all: "all", 全部: "all",
+};
 
 /* ---------- 工具 ---------- */
 function escapeHtml(s) {
@@ -41,6 +57,10 @@ function escapeHtml(s) {
 }
 function escapeReg(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function rootLabelOf(r) {
+  return (r.label && r.label.trim()) || r.path.split(/[\\/]/).filter(Boolean).pop() || r.path;
 }
 
 /** 把片段/标题中的命中词包上 <mark>（大小写不敏感，先转义再匹配；含同义词） */
@@ -77,11 +97,40 @@ function applyPin() {
   }
 }
 
-/* ---------- 类型过滤 ---------- */
-function filteredHits() {
-  const all = hits.map((h, i) => ({ h, i }));
-  if (typeFilter === "all") return all;
-  return all.filter((x) => x.h.doc_type === typeFilter);
+/* ---------- 范围（chips + @前缀） ---------- */
+/** @前缀解析：@法律 / @库名 → 范围；命中则剥离前缀 */
+function parseScopePrefix(raw) {
+  const m = raw.match(/^@(\S+)\s*/);
+  if (!m) return { q: raw, typeF: typeFilter, rootF: rootFilter, hit: false };
+  const tag = m[1].toLowerCase();
+  let typeF = typeFilter, rootF = rootFilter, hit = false;
+  if (tag in TYPE_ALIAS) {
+    typeF = TYPE_ALIAS[tag];
+    hit = true;
+  } else {
+    const roots = (cfg && cfg.roots ? cfg.roots : []).filter((r) => r.enabled);
+    const found = roots.find((r) => rootLabelOf(r).toLowerCase().includes(tag));
+    if (found) {
+      rootF = rootLabelOf(found);
+      hit = true;
+    }
+  }
+  return { q: raw.slice(m[0].length), typeF, rootF, hit };
+}
+
+/** 依据 cfg 重建根 chips */
+function renderRootChips() {
+  const roots = (cfg && cfg.roots ? cfg.roots : []).filter((r) => r.enabled);
+  const btns = ['<button class="chip' + (rootFilter === "all" ? " active" : "") + '" data-f="all">全部</button>']
+    .concat(roots.map((r) => {
+      const label = rootLabelOf(r);
+      return `<button class="chip${rootFilter === label ? " active" : ""}" data-f="${escapeHtml(label)}">${escapeHtml(label)}</button>`;
+    }));
+  $chipsRoot.innerHTML = btns.join("");
+}
+
+function setChipActive($wrap, f) {
+  $wrap.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.f === f));
 }
 
 /* ---------- 渲染 ---------- */
@@ -93,7 +142,7 @@ function render(query) {
     $resList.innerHTML =
       '<div class="empty">' +
       (anyHits
-        ? "当前类型下没有结果，试试其他徽标筛选"
+        ? "当前范围下没有结果，试试调整上方筛选或 @范围"
         : query
           ? "没有找到相关内容"
           : "输入关键词，检索你的本地知识库") +
@@ -108,6 +157,9 @@ function render(query) {
       const badge = TYPE_LABEL[h.doc_type]
         ? `<span class="badge badge-${h.doc_type.toLowerCase()}">${TYPE_LABEL[h.doc_type]}</span>`
         : "";
+      const rootTag = h.root
+        ? `<span class="hit-root">${escapeHtml(h.root)}</span>`
+        : "";
       const open = ctxOpen[i];
       const ctx = open
         ? `<div class="hit-ctx">${ctxCache[i] ? escapeHtml(ctxCache[i]) : "加载中…"}</div>`
@@ -117,6 +169,7 @@ function render(query) {
         <div class="hit-top">
           ${badge}
           <span class="hit-title">${highlight(h.title, query)}</span>
+          ${rootTag}
           <span class="hit-path">${escapeHtml(shortPath(h.path))}</span>
           <button class="ctx-btn" data-ctx="${i}" title="展开上下文">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></svg>
@@ -162,7 +215,7 @@ async function toggleContext(origIdx) {
       }
     }
   }
-  render($q.value);
+  render(lastQuery);
   const el = $resList.querySelector(`.ctx-btn[data-ctx="${origIdx}"]`);
   if (el) el.closest(".hit").scrollIntoView({ block: "nearest" });
 }
@@ -177,30 +230,43 @@ function setActive(pos) {
   if (el) el.scrollIntoView({ block: "nearest" });
 }
 
+/** 类型过滤后的可见列表（类型 chips 已下沉引擎，此处仅保留结构） */
+function filteredHits() {
+  return hits.map((h, i) => ({ h, i }));
+}
+
 /** 根据输入与面板状态刷新：面板显隐 + 窗口展开/折叠 */
 function updateView() {
-  const query = $q.value;
-  const wantExpand = query.trim().length > 0 || settingsOpen;
+  const query = lastQuery;
+  const wantExpand = $q.value.trim().length > 0 || settingsOpen;
   setExpanded(wantExpand);
-  $results.hidden = query.trim().length === 0;
+  $results.hidden = $q.value.trim().length === 0;
   $settings.hidden = !settingsOpen;
   render(query);
 }
 
 /* ---------- 动作 ---------- */
 async function doSearch() {
-  const query = $q.value;
-  if (!query.trim()) {
+  const raw = $q.value;
+  if (!raw.trim()) {
     hits = [];
     active = -1;
     lastTerms = [];
+    lastQuery = "";
     ctxCache = {};
     ctxOpen = {};
     updateView();
     return;
   }
+  const parsed = parseScopePrefix(raw);
+  lastQuery = parsed.q;
+  let r;
   try {
-    const r = await invoke("search", { q: query });
+    r = await invoke("search", {
+      q: parsed.q,
+      typeF: parsed.typeF === "all" ? null : parsed.typeF,
+      rootF: parsed.rootF === "all" ? null : parsed.rootF,
+    });
     hits = r.hits;
     lastTerms = r.terms || [];
   } catch (e) {
@@ -212,7 +278,7 @@ async function doSearch() {
   ctxCache = {};
   ctxOpen = {};
   active = hits.length ? 0 : -1;
-  render(query);
+  render(parsed.q);
 }
 
 function clearInput() {
@@ -221,6 +287,7 @@ function clearInput() {
   hits = [];
   active = -1;
   lastTerms = [];
+  lastQuery = "";
   ctxCache = {};
   ctxOpen = {};
   updateView();
@@ -235,18 +302,38 @@ function openHit(pos, reveal) {
 }
 
 /* ---------- 设置面板 ---------- */
+/** 范围页：根列表编辑器 */
+function renderRootsEditor() {
+  const roots = cfg && cfg.roots ? cfg.roots : [];
+  $rootsList.innerHTML = roots.length
+    ? roots
+        .map((r, i) => {
+          const label = rootLabelOf(r);
+          return `
+      <div class="root-row" data-i="${i}">
+        <input class="set-input root-label" data-k="label" value="${escapeHtml(r.label)}" placeholder="显示名" spellcheck="false" />
+        <span class="root-path" title="${escapeHtml(r.path)}">${escapeHtml(shortPath(r.path))}</span>
+        <label class="root-en"><input type="checkbox" data-k="enabled" ${r.enabled ? "checked" : ""} /> 启用</label>
+        <button class="root-del" data-del="${i}">移除</button>
+      </div>`;
+        })
+        .join("")
+    : '<div class="empty-sm">尚未添加目录，点击下方按钮选择</div>';
+}
+
 function openSettings() {
   settingsOpen = true;
+  settingsTab = "scope";
+  activateTab("scope");
   if (cfg) {
-    const dirs = (cfg.knowledge_dirs && cfg.knowledge_dirs.length)
-      ? cfg.knowledge_dirs
-      : (cfg.knowledge_dir ? [cfg.knowledge_dir] : []);
-    $setDirs.value = dirs.join("\n");
+    $setExcludes.value = (cfg.scope && cfg.scope.exclude_globs ? cfg.scope.exclude_globs : []).join("\n");
+    $setExts.value = (cfg.scope && cfg.scope.include_exts ? cfg.scope.include_exts : ["md", "markdown", "txt"]).join(", ");
+    $setMaxkb.value = (cfg.scope && cfg.scope.max_file_kb) || 4096;
     $setShortcut.value = cfg.shortcut;
     $setWidth.value = cfg.width;
     $setPin.checked = cfg.pin_mode;
   }
-  // 同义词词典：展示当前生效的合并结果
+  renderRootsEditor();
   invoke("get_synonyms")
     .then((s) => { $setSynonyms.value = s; })
     .catch(() => { $setSynonyms.value = "{}"; });
@@ -255,6 +342,14 @@ function openSettings() {
 function closeSettings() {
   settingsOpen = false;
   updateView();
+}
+
+function activateTab(name) {
+  settingsTab = name;
+  $settingsTabs.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  $settings.querySelectorAll(".tab-pane").forEach((p) => {
+    p.hidden = p.id !== "tab-" + name;
+  });
 }
 
 /* ---------- 事件绑定 ---------- */
@@ -294,14 +389,28 @@ document.getElementById("btn-settings").addEventListener("click", () => {
   settingsOpen ? closeSettings() : openSettings();
 });
 
-/* 类型过滤 chips */
-$chips.addEventListener("click", (e) => {
+/* 设置 Tabs */
+$settingsTabs.addEventListener("click", (e) => {
+  const btn = e.target.closest(".tab");
+  if (btn) activateTab(btn.dataset.tab);
+});
+
+/* 类型 chips（下沉引擎的范围过滤） */
+$chipsType.addEventListener("click", (e) => {
   const btn = e.target.closest(".chip");
   if (!btn) return;
   typeFilter = btn.dataset.f;
-  $chips.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c === btn));
-  active = visible.length ? 0 : -1;
-  render($q.value);
+  setChipActive($chipsType, typeFilter);
+  doSearch();
+});
+
+/* 库 chips（动态生成，下沉引擎） */
+$chipsRoot.addEventListener("click", (e) => {
+  const btn = e.target.closest(".chip");
+  if (!btn) return;
+  rootFilter = btn.dataset.f;
+  setChipActive($chipsRoot, rootFilter);
+  doSearch();
 });
 
 /* 选择并添加目录（追加语义，多库混检） */
@@ -311,9 +420,9 @@ document.getElementById("btn-pick").addEventListener("click", async () => {
   if (r.error) {
     $stats.textContent = "扫描失败: " + r.error;
   } else if (r.dir) {
-    cfg.knowledge_dirs = r.dirs;
-    if (cfg.knowledge_dir == null) cfg.knowledge_dir = r.dir;
-    $setDirs.value = r.dirs.join("\n");
+    cfg = await invoke("get_config");
+    renderRootsEditor();
+    renderRootChips();
     if (r.stats) $stats.textContent = `${r.stats.docs} 个文档 · ${r.stats.chunks} 个知识块`;
   } else {
     $stats.textContent = "就绪";
@@ -336,8 +445,13 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     // 1. 同义词词典（JSON 校验 + 热重载）
     const synText = $setSynonyms.value.trim() || "{}";
     await invoke("save_synonyms", { text: synText });
-    // 2. 目录列表（每行一个，去空行去重）
-    const dirs = [...new Set($setDirs.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean))];
+    // 2. 范围：根列表（编辑器已实时改 cfg.roots）+ 排除/扩展名/上限
+    cfg.scope = {
+      exclude_globs: $setExcludes.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+      include_exts: $setExts.value.split(/[,\s]+/).map((s) => s.trim().toLowerCase().replace(/^\./, "")).filter(Boolean),
+      max_file_kb: Number($setMaxkb.value) || 4096,
+    };
+    const dirs = cfg.roots.map((r) => r.path);
     const next = {
       ...cfg,
       knowledge_dirs: dirs,
@@ -348,7 +462,8 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     };
     cfg = await invoke("save_config", { cfg: next });
     applyPin();
-    // 3. 目录可能变化：重新全量同步 + 宽度立即生效
+    renderRootChips();
+    // 3. 范围可能变化：重新同步 + 宽度立即生效
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
     expanded = !expanded;
@@ -361,6 +476,33 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
 });
 
 document.getElementById("btn-quit").addEventListener("click", () => invoke("quit_app"));
+
+/* 根列表编辑器（事件委托） */
+$rootsList.addEventListener("input", (e) => {
+  const row = e.target.closest(".root-row");
+  if (!row || !cfg) return;
+  const i = Number(row.dataset.i);
+  if (e.target.dataset.k === "label") {
+    cfg.roots[i].label = e.target.value;
+    renderRootChips();
+  }
+});
+$rootsList.addEventListener("change", (e) => {
+  const row = e.target.closest(".root-row");
+  if (!row || !cfg) return;
+  const i = Number(row.dataset.i);
+  if (e.target.dataset.k === "enabled") {
+    cfg.roots[i].enabled = e.target.checked;
+  }
+});
+$rootsList.addEventListener("click", (e) => {
+  const del = e.target.closest(".root-del");
+  if (!del || !cfg) return;
+  const i = Number(del.dataset.del);
+  cfg.roots.splice(i, 1);
+  renderRootsEditor();
+  renderRootChips();
+});
 
 /* 索引变更（文件监听触发）→ 刷新统计并重跑当前搜索 */
 listen("index-updated", (ev) => {
@@ -376,6 +518,7 @@ listen("ui-reset", () => {
   hits = [];
   active = -1;
   lastTerms = [];
+  lastQuery = "";
   ctxCache = {};
   ctxOpen = {};
   settingsOpen = false;
@@ -387,19 +530,20 @@ listen("ui-reset", () => {
 (async () => {
   try {
     cfg = await invoke("get_config");
-    const dirs = (cfg.knowledge_dirs && cfg.knowledge_dirs.length)
-      ? cfg.knowledge_dirs
-      : (cfg.knowledge_dir ? [cfg.knowledge_dir] : []);
-    $setDirs.value = dirs.join("\n");
+    $setExcludes.value = (cfg.scope && cfg.scope.exclude_globs ? cfg.scope.exclude_globs : []).join("\n");
+    $setExts.value = (cfg.scope && cfg.scope.include_exts ? cfg.scope.include_exts : ["md", "markdown", "txt"]).join(", ");
+    $setMaxkb.value = (cfg.scope && cfg.scope.max_file_kb) || 4096;
     $setShortcut.value = cfg.shortcut;
     $setWidth.value = cfg.width;
     $setPin.checked = cfg.pin_mode;
     applyPin();
+    renderRootsEditor();
+    renderRootChips();
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
   } catch (e) {
     if (String(e).includes("尚未设置")) {
-      $stats.textContent = "请先在设置中选择知识库文件夹";
+      $stats.textContent = "请先在设置中添加知识库目录";
       openSettings();
     } else {
       console.error(e);

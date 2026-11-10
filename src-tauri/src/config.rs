@@ -1,5 +1,8 @@
-//! 应用配置：知识库目录 + 窗口形态 + 快捷键，存于系统应用配置目录下的 config.json
+//! 应用配置：知识库根（结构化）+ 范围规则 + 窗口形态 + 快捷键
+//! 存于系统应用配置目录下的 config.json
+//! 数据模型在 scope.rs（无 tauri 依赖，独立工具可挂载）
 
+use crate::scope::{basename_of, KnowledgeRoot, ScopeConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -10,12 +13,18 @@ pub const DEFAULT_WIDTH: f64 = 600.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// 知识库根目录（绝对路径）—— v0.3 兼容字段，等价于 knowledge_dirs 的单元素形式
+    /// v0.3 兼容字段：等价于 knowledge_dirs 单元素；仅作迁移来源保留
     #[serde(default)]
     pub knowledge_dir: Option<String>,
-    /// 知识库根目录列表（多库混检）；为空时回退 knowledge_dir
+    /// v0.4 兼容字段：迁移来源保留
     #[serde(default)]
     pub knowledge_dirs: Vec<String>,
+    /// v0.5 规范字段：结构化知识库根
+    #[serde(default)]
+    pub roots: Vec<KnowledgeRoot>,
+    /// 搜寻范围规则
+    #[serde(default)]
+    pub scope: ScopeConfig,
     /// 窗口位置（物理像素），用于重启恢复
     #[serde(default)]
     pub x: Option<i32>,
@@ -33,15 +42,24 @@ pub struct Config {
 }
 
 impl Config {
-    /// 生效的知识库根目录列表：优先 knowledge_dirs，否则回退旧单目录字段
-    pub fn effective_roots(&self) -> Vec<PathBuf> {
-        if !self.knowledge_dirs.is_empty() {
-            self.knowledge_dirs.iter().map(PathBuf::from).collect()
-        } else if let Some(d) = &self.knowledge_dir {
-            vec![PathBuf::from(d)]
-        } else {
-            Vec::new()
-        }
+    /// 生效的知识库根（enabled=true）
+    pub fn effective_roots(&self) -> Vec<KnowledgeRoot> {
+        self.roots.iter().filter(|r| r.enabled).cloned().collect()
+    }
+
+    /// 同步用 (路径, 显示名) 对
+    pub fn root_pairs(&self) -> Vec<(PathBuf, String)> {
+        self.effective_roots()
+            .into_iter()
+            .map(|r| {
+                let label = if r.label.is_empty() {
+                    basename_of(&r.path)
+                } else {
+                    r.label.clone()
+                };
+                (PathBuf::from(r.path), label)
+            })
+            .collect()
     }
 }
 
@@ -61,10 +79,32 @@ pub fn load(app: &tauri::AppHandle) -> Config {
     let Some(path) = config_path(app) else {
         return Config::default();
     };
-    fs::read_to_string(path)
+    let mut cfg: Config = fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    migrate(&mut cfg);
+    cfg
+}
+
+/// 旧版字段迁移：roots 为空时由 knowledge_dirs / knowledge_dir 合成
+fn migrate(cfg: &mut Config) {
+    if !cfg.roots.is_empty() {
+        return;
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for d in cfg.knowledge_dirs.iter().chain(cfg.knowledge_dir.iter()) {
+        let d = d.trim();
+        if d.is_empty() || seen.contains(&d.to_string()) {
+            continue;
+        }
+        seen.push(d.to_string());
+        cfg.roots.push(KnowledgeRoot {
+            path: d.to_string(),
+            label: basename_of(d),
+            enabled: true,
+        });
+    }
 }
 
 pub fn save(app: &tauri::AppHandle, cfg: &Config) {
@@ -82,6 +122,8 @@ impl Default for Config {
         Config {
             knowledge_dir: None,
             knowledge_dirs: Vec::new(),
+            roots: Vec::new(),
+            scope: ScopeConfig::default(),
             x: None,
             y: None,
             width: DEFAULT_WIDTH,

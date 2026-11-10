@@ -4,6 +4,7 @@
 //! - notify 触发 sync：按文件 mtime 差异做增量 delete_by_term + add
 //! - 查询：jieba 分词 → 同义词展开（静态词典）→ 标题加权 BM25
 
+use crate::scope::ScopeConfig;
 use crate::indexer::{self, DocumentChunk, Stats};
 use jieba_rs::Jieba;
 use serde::Serialize;
@@ -11,12 +12,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, BoostQuery, Occur, QueryParser};
+use tantivy::query::{BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions, Value,
 };
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
+
+/// 索引 schema 版本：字段/选项变更时递增（旧索引自动清空重建）
+const SCHEMA_VERSION: u32 = 5;
 
 /// 查询停用词：泛词在 OR 语义下只会引入噪声候选（BM25 的 IDF 已缓解，这里直接剔除）
 const STOPWORDS: &[&str] = &[
@@ -115,6 +119,8 @@ pub struct Hit {
     pub snippet: String,
     /// 块起始行号
     pub line: usize,
+    /// 所属知识库根显示名
+    pub root: String,
     /// 绝对路径（打开 / 上下文展开）
     pub abs: String,
     #[serde(skip_serializing)]
@@ -170,6 +176,7 @@ struct Fields {
     content: Field,
     breadcrumbs: Field,
     doc_type: Field,
+    root: Field,
     line: Field,
 }
 
@@ -240,18 +247,45 @@ impl Engine {
                         .set_index_option(IndexRecordOption::WithFreqsAndPositions),
                 ),
         );
-        let doc_type = schema_builder.add_text_field("doc_type", TextOptions::default().set_stored());
+        let doc_type = schema_builder.add_text_field(
+            "doc_type",
+            TextOptions::default()
+                .set_stored()
+                .set_indexing_options(
+                    TextFieldIndexing::default()
+                        .set_tokenizer("raw")
+                        .set_index_option(IndexRecordOption::Basic),
+                ),
+        );
+        // 所属根显示名（raw 可索引，支持按库过滤）
+        let root = schema_builder.add_text_field(
+            "root",
+            TextOptions::default()
+                .set_stored()
+                .set_indexing_options(
+                    TextFieldIndexing::default()
+                        .set_tokenizer("raw")
+                        .set_index_option(IndexRecordOption::Basic),
+                ),
+        );
         let line = schema_builder.add_u64_field("line", NumericOptions::default().set_stored());
         let schema = schema_builder.build();
 
-        // 哨兵文件区分"空目录"与"已建索引"（不能用 meta.json —— 那是 tantivy 自己的元数据）
+        // schema 版本化：版本不符/损坏 → 清空目录重建（manifest 一并清除触发全量同步）
         let sentinel = index_dir.join(".kd-created");
-        let index = if sentinel.exists() {
+        let expected = format!("schema-{SCHEMA_VERSION}");
+        let index = if sentinel.exists()
+            && std::fs::read_to_string(&sentinel)
+                .map(|s| s.trim() == expected)
+                .unwrap_or(false)
+        {
             Index::open_in_dir(index_dir).map_err(|e| format!("打开索引失败: {e}"))?
         } else {
+            let _ = std::fs::remove_dir_all(index_dir);
+            std::fs::create_dir_all(index_dir).map_err(|e| e.to_string())?;
             let idx = Index::create_in_dir(index_dir, schema.clone())
                 .map_err(|e| format!("创建索引失败: {e}"))?;
-            std::fs::write(&sentinel, "created").map_err(|e| e.to_string())?;
+            std::fs::write(&sentinel, &expected).map_err(|e| e.to_string())?;
             idx
         };
 
@@ -288,7 +322,7 @@ impl Engine {
             writer: Mutex::new(writer),
             jieba,
             parsers,
-            fields: Fields { path, rel, title, content, breadcrumbs, doc_type, line },
+            fields: Fields { path, rel, title, content, breadcrumbs, doc_type, root, line },
             manifest: Mutex::new(manifest),
             synonyms: Mutex::new(synonyms),
         })
@@ -305,24 +339,32 @@ impl Engine {
 
     /// 增量同步（多知识库根聚合）：只 stat 全部文件做 mtime 差异，
     /// **仅重读重切变更文件**（大库免全量重扫）；多根时展示路径带库名前缀
-    pub fn sync_roots(&self, roots: &[PathBuf]) -> Result<Stats, String> {
+    /// roots: (路径, 显示名)；scope: 范围规则
+    pub fn sync_roots(&self, roots: &[(PathBuf, String)], scope: &ScopeConfig) -> Result<Stats, String> {
         if roots.is_empty() {
             return Ok(Stats { docs: 0, chunks: 0 });
         }
         let multi = roots.len() > 1;
-        let mut plan: Vec<indexer::FilePlan> = Vec::new();
-        for root in roots {
-            let mut ps = indexer::scan_index_plan(root)?;
-            if multi {
-                let base = root
-                    .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| root.to_string_lossy().to_string());
-                for p in &mut ps {
-                    p.rel = format!("{base}/{}", p.rel);
-                }
+        let opts = indexer::PlanOptions {
+            include_exts: scope.include_exts.clone(),
+            max_file_bytes: if scope.max_file_kb == 0 {
+                4 * 1024 * 1024
+            } else {
+                scope.max_file_kb * 1024
+            },
+            exclude_globs: scope.exclude_globs.clone(),
+        };
+        let mut plan: Vec<(indexer::FilePlan, String)> = Vec::new();
+        for (root, label) in roots {
+            let ps = indexer::scan_index_plan(root, &opts)?;
+            for p in ps {
+                let rel = if multi {
+                    format!("{label}/{}", p.rel)
+                } else {
+                    p.rel
+                };
+                plan.push((indexer::FilePlan { rel, ..p }, label.clone()));
             }
-            plan.append(&mut ps);
         }
 
         let manifest_path = self.index_dir.join("manifest.json");
@@ -332,10 +374,11 @@ impl Engine {
         let mut writer = self.writer.lock().expect("writer lock");
 
         // 差异集合：mtime 变化/新文件 → touched；清单里有但磁盘没了 → removed
-        let plan_abs: HashSet<&String> = plan.iter().map(|p| &p.abs).collect();
-        let touched: Vec<&indexer::FilePlan> = plan
+        let plan_abs: HashSet<&String> = plan.iter().map(|(p, _)| &p.abs).collect();
+        let touched: Vec<(&indexer::FilePlan, &String)> = plan
             .iter()
-            .filter(|p| manifest.get(&p.abs).map(|m| m[0]) != Some(p.mtime))
+            .filter(|(p, _)| manifest.get(&p.abs).map(|m| m[0]) != Some(p.mtime))
+            .map(|(p, l)| (p, l))
             .collect();
         let removed: Vec<String> = manifest
             .keys()
@@ -349,15 +392,15 @@ impl Engine {
             for abs in &removed {
                 writer.delete_term(Term::from_field_text(self.fields.path, abs));
             }
-            for p in &touched {
+            for (p, _) in &touched {
                 writer.delete_term(Term::from_field_text(self.fields.path, &p.abs));
             }
             // 重建：仅变更文件重新读取切块
-            for p in &touched {
+            for (p, label) in &touched {
                 let chunks = indexer::chunk_file(Path::new(&p.abs), &p.rel);
                 chunk_counts.insert(p.abs.clone(), chunks.len() as u64);
                 for c in &chunks {
-                    self.add_doc(&mut writer, c);
+                    self.add_doc(&mut writer, c, label);
                 }
             }
             writer.commit().map_err(|e| e.to_string())?;
@@ -367,7 +410,7 @@ impl Engine {
 
         // 更新清单：未变更文件沿用原计数
         let mut new_manifest: HashMap<String, [u64; 2]> = HashMap::with_capacity(plan.len());
-        for p in &plan {
+        for (p, _) in &plan {
             let entry = if chunk_counts.contains_key(&p.abs) {
                 [p.mtime, chunk_counts[&p.abs]]
             } else {
@@ -393,7 +436,7 @@ impl Engine {
         self.synonyms.lock().expect("syn lock").clone()
     }
 
-    fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk) {
+    fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk, root_label: &str) {
         let f = &self.fields;
         let bc = c.breadcrumbs.join(" > ");
         writer
@@ -404,6 +447,7 @@ impl Engine {
                 f.content => c.text.as_str(),
                 f.breadcrumbs => bc.as_str(),
                 f.doc_type => c.doc_type.as_str(),
+                f.root => root_label,
                 f.line => c.line as u64,
             ))
             .ok();
@@ -415,8 +459,15 @@ impl Engine {
         Stats { docs: manifest.len(), chunks: chunks as usize }
     }
 
-    /// BM25 检索：分词 → 同义词展开 → 标题加权
-    pub fn search(&self, query: &str, limit: usize) -> SearchResponse {
+    /// BM25 检索：分词 → 停用词 → 同义词展开 → 标题/面包屑加权
+    /// type_filter/root_filter：范围限定（Some 时以 Must 子句下沉到引擎）
+    pub fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        type_filter: Option<&str>,
+        root_filter: Option<&str>,
+    ) -> SearchResponse {
         let q = query.trim();
         if q.is_empty() {
             return SearchResponse { hits: Vec::new(), terms: Vec::new() };
@@ -481,6 +532,21 @@ impl Engine {
         let content_q = build(&self.parsers.content, &effective);
         let bc_q = build(&self.parsers.breadcrumbs, &effective);
         let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
+        // 范围限定：Must 子句在候选集阶段即收窄（Top50 不会被其他范围的结果挤占）
+        if let Some(t) = type_filter {
+            let term = Term::from_field_text(self.fields.doc_type, t);
+            clauses.push((
+                Occur::Must,
+                Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
+            ));
+        }
+        if let Some(r) = root_filter {
+            let term = Term::from_field_text(self.fields.root, r);
+            clauses.push((
+                Occur::Must,
+                Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
+            ));
+        }
         if let Some(q) = title_q {
             clauses.push((Occur::Should, Box::new(BoostQuery::new(q, 2.0))));
         }
@@ -517,6 +583,7 @@ impl Engine {
             let content = get(self.fields.content);
             let breadcrumbs = get(self.fields.breadcrumbs);
             let doc_type = get(self.fields.doc_type);
+            let root = get(self.fields.root);
             let line = d
                 .get_first(self.fields.line)
                 .and_then(|v| v.as_u64())
@@ -531,7 +598,9 @@ impl Engine {
                 title,
                 breadcrumbs: bc,
                 doc_type,
-                snippet: make_snippet(&content, &effective),                line,
+                root,
+                snippet: make_snippet(&content, &effective),
+                line,
                 abs,
                 score,
             });

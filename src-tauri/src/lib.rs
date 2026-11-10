@@ -5,6 +5,7 @@
 //! 检索：Tantivy BM25 + jieba 分词 + 持久化索引 + 同义词改写（纯离线）。
 
 pub mod config;
+pub mod scope;
 pub mod engine;
 pub mod indexer;
 
@@ -56,11 +57,12 @@ struct PickResult {
 /// 后台执行一次多根同步并推送统计
 fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let scope = state.cfg.lock().expect("cfg lock").scope.clone();
     if roots.is_empty() {
         return;
     }
-    match state.engine.sync_roots(&roots) {
+    match state.engine.sync_roots(&roots, &scope) {
         Ok(stats) => {
             let _ = app.emit("index-updated", &stats);
         }
@@ -74,7 +76,7 @@ fn sync_and_emit(app: &AppHandle) {
 /// 旧 watcher 被替换后通道关闭，旧监听线程自动退出（防线程累积）
 fn start_watchers(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
     if roots.is_empty() {
         return;
     }
@@ -83,7 +85,7 @@ fn start_watchers(app: &AppHandle) {
         Ok(w) => w,
         Err(_) => return,
     };
-    for r in &roots {
+    for (r, _label) in &roots {
         if watcher.watch(r, RecursiveMode::Recursive).is_err() {
             return;
         }
@@ -213,17 +215,25 @@ fn ui_mode(app: AppHandle, mode: String, state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-fn search(q: String, state: State<'_, AppState>) -> SearchResponse {
-    state.engine.search(&q, 50)
+fn search(
+    q: String,
+    type_filter: Option<String>,
+    root_filter: Option<String>,
+    state: State<'_, AppState>,
+) -> SearchResponse {
+    state
+        .engine
+        .search(&q, 50, type_filter.as_deref(), root_filter.as_deref())
 }
 
 #[tauri::command]
 fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
-    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
     }
-    state.engine.sync_roots(&roots)
+    let scope = state.cfg.lock().expect("cfg lock").scope.clone();
+    state.engine.sync_roots(&roots, &scope)
 }
 
 /// 追加一个知识库目录（去重），保存配置、全量同步、重建监听
@@ -253,8 +263,12 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
 
     {
         let mut cfg = state.cfg.lock().expect("cfg lock");
-        if !cfg.knowledge_dirs.contains(&dir_str) {
-            cfg.knowledge_dirs.push(dir_str.clone());
+        if !cfg.roots.iter().any(|r| r.path == dir_str) {
+            cfg.roots.push(config::KnowledgeRoot {
+                path: dir_str.clone(),
+                label: config::basename_of(&dir_str),
+                enabled: true,
+            });
         }
         if cfg.knowledge_dir.is_none() {
             cfg.knowledge_dir = Some(dir_str.clone());
@@ -262,10 +276,18 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
         config::save(&app, &cfg);
     }
 
-    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
-    let stats = state.engine.sync_roots(&roots).ok();
+    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let scope = state.cfg.lock().expect("cfg lock").scope.clone();
+    let stats = state.engine.sync_roots(&roots, &scope).ok();
     start_watchers(&app);
-    let dirs = state.cfg.lock().expect("cfg lock").knowledge_dirs.clone();
+    let dirs = state
+        .cfg
+        .lock()
+        .expect("cfg lock")
+        .roots
+        .iter()
+        .map(|r| r.path.clone())
+        .collect();
     Ok(PickResult { dir: Some(dir_str), dirs, stats, error: None })
 }
 
@@ -305,14 +327,14 @@ fn expand_context(
     after: usize,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let roots = state.cfg.lock().expect("cfg lock").effective_roots();
+    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
     }
     let canon_path = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
     let allowed = roots
         .iter()
-        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .filter_map(|(r, _)| std::fs::canonicalize(r).ok())
         .any(|root| canon_path.starts_with(&root));
     if !allowed {
         return Err("路径不在知识库目录内".into());

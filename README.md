@@ -63,7 +63,7 @@ cd tooling/search-verify && cargo run              # 检索引擎端到端验证
 每次 push 到 `main`，Actions 上传 artifact `knowledge-dock-windows`：
 
 - `knowledge-dock-portable.exe` —— 免安装，双击即用
-- `knowledge-dock_0.4.0_x64-setup.exe` —— NSIS 安装包
+- `knowledge-dock_0.5.0_x64-setup.exe` —— NSIS 安装包
 
 推送 `v*` 标签时自动创建 GitHub Release 并附以上产物；也可在 Actions 页手动触发并填版本号发版。
 
@@ -90,3 +90,12 @@ scripts/gen-icon.mjs    图标生成（纯 Node 绘制 PNG）
 tooling/search-verify   检索引擎端到端验证工具
 .github/workflows/      GitHub Actions 编译流水线
 ```
+
+## 范围与配置（v0.5.0）
+
+- **结构化知识库根**：每个根可自定义显示名、可单独停用（停用即从搜寻范围移除，不必删除）
+- **搜寻范围规则**：排除规则（`dir/` 排除目录、`*.tmp.md` 通配、精确相对路径）、收录扩展名可配置（默认 md/markdown/txt）、单文件大小上限可调
+- **范围下沉引擎**：类型/库筛选以 Must 子句进入 Tantivy 查询，候选集阶段即收窄（Top50 不会被范围外结果挤占）
+- **`@` 前缀快筛选**：输入框键入 `@法律 关键词` 或 `@库名 关键词` 即时限定范围
+- **设置面板分区**：范围（根列表/排除/扩展名/上限）/ 通用（快捷键/宽度/钉住）/ 同义词，三个 Tab
+- schema 版本化：引擎字段变更时旧索引自动清空重建（后台增量，无需手动干预）
