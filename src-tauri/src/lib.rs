@@ -352,6 +352,31 @@ fn save_synonyms(app: AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
+
+/// 当前生效的停用词列表 JSON
+#[tauri::command]
+fn get_stopwords(state: State<'_, AppState>) -> String {
+    let set = state.engine.stopwords_set();
+    let list: Vec<&String> = set.iter().collect();
+    serde_json::to_string_pretty(&list).unwrap_or_else(|_| "[]".into())
+}
+
+/// 保存用户停用词列表（JSON 数组）→ 写配置目录 → 引擎热重载
+#[tauri::command]
+fn save_stopwords(app: AppHandle, text: String) -> Result<(), String> {
+    let list: Vec<String> = serde_json::from_str(&text)
+        .map_err(|e| format!("JSON 格式错误: {e}"))?;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("stopwords.json"), serde_json::to_string_pretty(&list).unwrap_or_default())
+        .map_err(|e| e.to_string())?;
+    let mut set = engine::load_stopwords(Some(&dir));
+    // 用户文件覆盖默认：直接用用户列表
+    set = list.iter().map(|w| w.trim().to_lowercase()).collect();
+    let state: State<AppState> = app.state();
+    state.engine.reload_stopwords(set);
+    Ok(())
+}
 /// 导出配置到用户选择的 JSON 文件
 #[tauri::command]
 fn export_config(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
@@ -527,10 +552,13 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::temp_dir().join("knowledge-dock"));
+            let stopwords = engine::load_stopwords(
+                handle.path().app_config_dir().ok().as_deref(),
+            );
             let synonyms = engine::load_synonyms(
                 handle.path().app_config_dir().ok().as_deref(),
             );
-            let engine = Arc::new(Engine::open_or_create(&data_dir.join("index"), synonyms)?);
+            let engine = Arc::new(Engine::open_or_create(&data_dir.join("index"), synonyms, stopwords)?);
 
             // 先注册全局状态（后续 setup 内的所有 state() 访问都依赖它）
             app.manage(AppState {
@@ -600,6 +628,8 @@ pub fn run() {
             expand_context,
             get_synonyms,
             save_synonyms,
+            get_stopwords,
+            save_stopwords,
             export_config,
             import_config,
             open_file,

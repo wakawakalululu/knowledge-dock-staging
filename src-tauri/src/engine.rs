@@ -22,14 +22,8 @@ use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocumen
 /// 索引 schema 版本：字段/选项变更时递增（旧索引自动清空重建）
 const SCHEMA_VERSION: u32 = 5;
 
-/// 查询停用词：泛词在 OR 语义下只会引入噪声候选（BM25 的 IDF 已缓解，这里直接剔除）
-const STOPWORDS: &[&str] = &[
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也",
-    "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那",
-    "怎么", "如何", "什么", "为什么", "请问", "哪些", "一下", "关于", "怎么办", "需要", "可以",
-    "应该", "如果", "因为", "所以", "还是", "以及", "对于", "根据", "通过", "进行", "使用",
-    "相关", "情况", "问题",
-];
+/// 内嵌默认停用词（用户可通过配置目录 stopwords.json 覆盖扩展）
+const DEFAULT_STOPWORDS: &str = include_str!("../assets/stopwords.json");
 
 // ---------------- jieba 分词器接入 Tantivy ----------------
 
@@ -174,6 +168,24 @@ pub fn load_synonyms(config_dir: Option<&Path>) -> HashMap<String, Vec<String>> 
     dict
 }
 
+/// 加载停用词（内嵌默认 + 用户覆盖）
+pub fn load_stopwords(config_dir: Option<&Path>) -> HashSet<String> {
+    let mut set: HashSet<String> = serde_json::from_str(DEFAULT_STOPWORDS)
+        .unwrap_or_default();
+    if let Some(dir) = config_dir {
+        let p = dir.join("stopwords.json");
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            if let Ok(user_list) = serde_json::from_str::<Vec<String>>(&s) {
+                for w in user_list {
+                    let w = w.trim().to_lowercase();
+                    if !w.is_empty() { set.insert(w); }
+                }
+            }
+        }
+    }
+    set
+}
+
 // ---------------- 引擎 ----------------
 
 struct Fields {
@@ -204,11 +216,12 @@ pub struct Engine {
     /// abs -> [mtime_ms, chunk_count]
     manifest: Mutex<HashMap<String, [u64; 2]>>,
     synonyms: Mutex<HashMap<String, Vec<String>>>,
+    stopwords: Mutex<HashSet<String>>,
 }
 
 impl Engine {
     /// 打开或创建持久化索引（秒开：仅 mmap 元数据，不重建）
-    pub fn open_or_create(index_dir: &Path, synonyms: HashMap<String, Vec<String>>) -> Result<Engine, String> {
+    pub fn open_or_create(index_dir: &Path, synonyms: HashMap<String, Vec<String>>, stopwords_set: HashSet<String>) -> Result<Engine, String> {
         std::fs::create_dir_all(index_dir).map_err(|e| e.to_string())?;
         let mut schema_builder = Schema::builder();
 
@@ -332,6 +345,7 @@ impl Engine {
             fields: Fields { path, rel, title, content, breadcrumbs, doc_type, root, line },
             manifest: Mutex::new(manifest),
             synonyms: Mutex::new(synonyms),
+            stopwords: Mutex::new(stopwords_set),
         })
     }
 
@@ -443,6 +457,14 @@ impl Engine {
         self.synonyms.lock().expect("syn lock").clone()
     }
 
+    pub fn stopwords_set(&self) -> HashSet<String> {
+        self.stopwords.lock().expect("sw lock").clone()
+    }
+
+    pub fn reload_stopwords(&self, sw: HashSet<String>) {
+        *self.stopwords.lock().expect("sw lock") = sw;
+    }
+
     fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk, root_label: &str) {
         let f = &self.fields;
         let bc = c.breadcrumbs.join(" > ");
@@ -532,7 +554,7 @@ impl Engine {
         let filtered: Vec<String> = terms
             .iter()
             .map(|s| s.as_str())
-            .filter(|t| !STOPWORDS.contains(t))
+            .filter(|t| !self.stopwords.lock().expect("sw lock").contains(*t))
             .map(|t| t.to_string())
             .collect();
         if !filtered.is_empty() {

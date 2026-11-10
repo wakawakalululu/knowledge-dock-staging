@@ -24,6 +24,7 @@ const $setShortcut = document.getElementById("set-shortcut");
 const $setWidth = document.getElementById("set-width");
 const $setPin = document.getElementById("set-pin");
 const $setSynonyms = document.getElementById("set-synonyms");
+const $setStopwords = document.getElementById("set-stopwords");
 const $historyPanel = document.getElementById("history-panel");
 const $historyList = document.getElementById("history-list");
 
@@ -376,6 +377,9 @@ function openSettings() {
   }
   renderRootsEditor();
   renderStats();
+  invoke("get_stopwords")
+    .then((s) => { $setStopwords.value = s; })
+    .catch(() => { $setStopwords.value = "[]"; });
   invoke("get_synonyms")
     .then((s) => { $setSynonyms.value = s; })
     .catch(() => { $setSynonyms.value = "{}"; });
@@ -500,6 +504,8 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     // 1. 同义词词典（JSON 校验 + 热重载）
     const synText = $setSynonyms.value.trim() || "{}";
     await invoke("save_synonyms", { text: synText });
+    const swText = $setStopwords.value.trim() || "[]";
+    await invoke("save_stopwords", { text: swText });
     // 2. 范围：根列表（编辑器已实时改 cfg.roots）+ 排除/扩展名/上限
     cfg.scope = {
       exclude_globs: $setExcludes.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
