@@ -127,6 +127,27 @@ html, body {
 /* hidden 属性必须显式压过 display:flex */
 .card-panel[hidden] { display: none; }
 
+/* 搜索历史面板 */
+.history-head {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px 0;
+}
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.history-item:hover { background: var(--hover); }
+.history-item svg { width: 13px; height: 13px; flex: none; color: var(--text-dim); }
+.history-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* 范围 chips（两行：类型 / 知识库） */
 .chips {
   flex: none;

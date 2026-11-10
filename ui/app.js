@@ -24,8 +24,11 @@ const $setShortcut = document.getElementById("set-shortcut");
 const $setWidth = document.getElementById("set-width");
 const $setPin = document.getElementById("set-pin");
 const $setSynonyms = document.getElementById("set-synonyms");
+const $historyPanel = document.getElementById("history-panel");
+const $historyList = document.getElementById("history-list");
 
 let hits = [];            // 当前搜索结果（全量，范围已下沉引擎）
+let searchHistory = [];   // 搜索历史
 let active = -1;          // 键盘选中的位置（visible 内下标）
 let debounceTimer = null;
 let cfg = null;           // 主进程下发的配置
@@ -131,6 +134,43 @@ function renderRootChips() {
 
 function setChipActive($wrap, f) {
   $wrap.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c.dataset.f === f));
+}
+
+/* ---------- 搜索历史 ---------- */
+async function recordSearch(q) {
+  if (!q.trim()) return;
+  try {
+    searchHistory = await invoke("add_search_history", { q });
+  } catch (_) {}
+}
+
+function renderHistory() {
+  if (!searchHistory.length) {
+    $historyList.innerHTML = '<div class="empty-sm">暂无搜索记录</div>';
+    return;
+  }
+  $historyList.innerHTML = searchHistory
+    .map((q) => `
+      <div class="history-item" data-q="${escapeHtml(q)}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <span>${escapeHtml(q)}</span>
+      </div>`)
+    .join("");
+  $historyList.querySelectorAll(".history-item").forEach((el) => {
+    el.addEventListener("click", () => {
+      $q.value = el.dataset.q;
+      $btnClear.hidden = false;
+      $historyPanel.hidden = true;
+      doSearch();
+      $q.focus();
+    });
+  });
+}
+
+async function loadHistory() {
+  try {
+    searchHistory = await invoke("get_search_history");
+  } catch (_) { searchHistory = []; }
 }
 
 /* ---------- 渲染 ---------- */
@@ -279,6 +319,7 @@ async function doSearch() {
   ctxOpen = {};
   active = hits.length ? 0 : -1;
   render(parsed.q);
+  recordSearch(parsed.q);
 }
 
 function clearInput() {
@@ -355,8 +396,21 @@ function activateTab(name) {
 /* ---------- 事件绑定 ---------- */
 $q.addEventListener("input", () => {
   $btnClear.hidden = !$q.value;
+  $historyPanel.hidden = !!$q.value.trim();
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(doSearch, 150);
+});
+
+$q.addEventListener("focus", () => {
+  if (!$q.value.trim() && searchHistory.length) {
+    renderHistory();
+    $historyPanel.hidden = false;
+  }
+});
+
+$q.addEventListener("blur", () => {
+  // 延迟隐藏以允许点击历史项
+  setTimeout(() => { $historyPanel.hidden = true; }, 200);
 });
 
 $q.addEventListener("keydown", (e) => {
@@ -477,6 +531,13 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
 
 document.getElementById("btn-quit").addEventListener("click", () => invoke("quit_app"));
 
+/* 清空搜索历史 */
+document.getElementById("btn-clear-history").addEventListener("click", async () => {
+  await invoke("clear_search_history");
+  searchHistory = [];
+  renderHistory();
+});
+
 /* 根列表编辑器（事件委托） */
 $rootsList.addEventListener("input", (e) => {
   const row = e.target.closest(".root-row");
@@ -539,6 +600,7 @@ listen("ui-reset", () => {
     applyPin();
     renderRootsEditor();
     renderRootChips();
+    await loadHistory();
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
   } catch (e) {

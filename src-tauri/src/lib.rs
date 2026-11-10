@@ -226,6 +226,35 @@ fn search(
         .search(&q, 50, type_filter.as_deref(), root_filter.as_deref())
 }
 
+/// 添加搜索记录到历史（去重、最新在前、最多 20 条），返回更新后的历史
+#[tauri::command]
+fn add_search_history(q: String, app: AppHandle, state: State<'_, AppState>) -> Vec<String> {
+    let q = q.trim().to_string();
+    let mut cfg = state.cfg.lock().expect("cfg lock");
+    if !q.is_empty() {
+        cfg.search_history.retain(|h| h != &q);
+        cfg.search_history.insert(0, q);
+        cfg.search_history.truncate(20);
+    }
+    let history = cfg.search_history.clone();
+    config::save(&app, &cfg);
+    history
+}
+
+/// 获取搜索历史
+#[tauri::command]
+fn get_search_history(state: State<'_, AppState>) -> Vec<String> {
+    state.cfg.lock().expect("cfg lock").search_history.clone()
+}
+
+/// 清空搜索历史
+#[tauri::command]
+fn clear_search_history(app: AppHandle, state: State<'_, AppState>) {
+    state.cfg.lock().expect("cfg lock").search_history.clear();
+    let cfg = state.cfg.lock().expect("cfg lock").clone();
+    config::save(&app, &cfg);
+}
+
 #[tauri::command]
 fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
     let roots = state.cfg.lock().expect("cfg lock").root_pairs();
@@ -508,6 +537,9 @@ pub fn run() {
             save_config,
             ui_mode,
             search,
+            add_search_history,
+            get_search_history,
+            clear_search_history,
             rescan,
             pick_folder,
             expand_context,

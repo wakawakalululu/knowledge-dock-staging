@@ -40,6 +40,9 @@ pub struct Config {
     /// 全局快捷键（如 "Alt+Space"）
     #[serde(default = "default_shortcut")]
     pub shortcut: String,
+    /// 搜索历史（最近 20 条，最新在前）
+    #[serde(default)]
+    pub search_history: Vec<String>,
 }
 
 impl Config {
@@ -130,6 +133,7 @@ impl Default for Config {
             width: DEFAULT_WIDTH,
             pin_mode: false,
             shortcut: DEFAULT_SHORTCUT.to_string(),
+            search_history: Vec::new(),
         }
     }
 }
