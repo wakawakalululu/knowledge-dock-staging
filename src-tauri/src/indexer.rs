@@ -6,19 +6,15 @@
 //! - 兜底：纯文本按空行分段
 //!
 //! 检索与打分在 engine.rs（Tantivy BM25 + jieba 分词）。
-
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 use walkdir::WalkDir;
-
 const EXTS: [&str; 3] = ["md", "markdown", "txt"];
 const IGNORE_DIRS: [&str; 6] = [
     "node_modules", "target", "dist", "__pycache__", ".git", ".obsidian",
 ];
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
-
 /// 法规条文行：第X条（可选前置空白）
 static RE_ARTICLE: OnceLock<regex::Regex> = OnceLock::new();
 /// 法规层级行：第X编/章/节（允许 Markdown 标记前缀，标题文本随后）
@@ -27,7 +23,6 @@ static RE_CHAPTER: OnceLock<regex::Regex> = OnceLock::new();
 static RE_Q: OnceLock<regex::Regex> = OnceLock::new();
 /// 问答行：答：/A: 等
 static RE_A: OnceLock<regex::Regex> = OnceLock::new();
-
 fn re_article() -> &'static regex::Regex {
     RE_ARTICLE.get_or_init(|| {
         regex::Regex::new(r"^\s*第[一二三四五六七八九十百千万零两]+条").unwrap()
@@ -44,12 +39,10 @@ fn re_q() -> &'static regex::Regex {
 fn re_a() -> &'static regex::Regex {
     RE_A.get_or_init(|| regex::Regex::new(r"^\s*(?:答|A)[:：.]\s*(.*)$").unwrap())
 }
-
 pub const TYPE_LAW: &str = "Law";
 pub const TYPE_MANUAL: &str = "Manual";
 pub const TYPE_QA: &str = "QA";
 pub const TYPE_NOTE: &str = "Note";
-
 /// 统一知识单元：三种格式收敛到同一结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentChunk {
@@ -68,17 +61,14 @@ pub struct DocumentChunk {
     /// 块起始行号（1-based）
     pub line: usize,
 }
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Stats {
     pub docs: usize,
     pub chunks: usize,
 }
-
 fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || IGNORE_DIRS.contains(&name)
 }
-
 fn extract_title(content: &str, fallback: &str) -> String {
     for line in content.lines().take(30) {
         let t = line.trim();
@@ -91,7 +81,6 @@ fn extract_title(content: &str, fallback: &str) -> String {
     }
     fallback.to_string()
 }
-
 /// 问答对数量，>=2 视为题库/FAQ 文档
 fn count_qa_pairs(content: &str) -> usize {
     let mut in_q = false;
@@ -110,12 +99,10 @@ fn count_qa_pairs(content: &str) -> usize {
     }
     pairs
 }
-
 /// 是否法规文档：条文标记足够密集
 fn is_law(content: &str) -> bool {
     content.lines().filter(|l| re_article().is_match(l)).count() >= 2
 }
-
 /// 待索引文件清单（只 stat 不读内容，供增量同步做 mtime 差异）
 #[derive(Debug, Clone)]
 pub struct FilePlan {
@@ -123,7 +110,6 @@ pub struct FilePlan {
     pub abs: String,
     pub mtime: u64,
 }
-
 /// 扫描范围选项（由 ScopeConfig 派生）
 #[derive(Debug, Clone, Default)]
 pub struct PlanOptions {
@@ -134,7 +120,6 @@ pub struct PlanOptions {
     /// 排除规则（相对路径）：`dir/` 目录前缀、`*.tmp.md` 通配、精确路径/文件名
     pub exclude_globs: Vec<String>,
 }
-
 pub fn mtime_ms(p: &Path) -> u64 {
     p.metadata()
         .and_then(|m| m.modified())
@@ -143,7 +128,6 @@ pub fn mtime_ms(p: &Path) -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
-
 /// 排除规则匹配：`dir/` 前缀 / `*` 通配 / 精确相对路径或文件名
 fn is_excluded(rel: &str, rules: &[String]) -> bool {
     let rel = rel.replace('\\', "/");
@@ -168,7 +152,6 @@ fn is_excluded(rel: &str, rules: &[String]) -> bool {
     }
     false
 }
-
 /// 扫描目录，按范围规则产出合格文件的清单（不读取文件内容）
 pub fn scan_index_plan(root: &Path, opts: &PlanOptions) -> Result<Vec<FilePlan>, String> {
     if !root.is_dir() {
@@ -214,7 +197,6 @@ pub fn scan_index_plan(root: &Path, opts: &PlanOptions) -> Result<Vec<FilePlan>,
     }
     Ok(plans)
 }
-
 /// 单文件读取 + 分类切块（增量同步只对变更文件调用）
 pub fn chunk_file(abs: &Path, rel: &str) -> Vec<DocumentChunk> {
     let Ok(raw) = std::fs::read(abs) else { return Vec::new() };
@@ -225,7 +207,6 @@ pub fn chunk_file(abs: &Path, rel: &str) -> Vec<DocumentChunk> {
         .unwrap_or_default();
     let title = extract_title(&content, &stem);
     let abs_str = abs.to_string_lossy().to_string();
-
     if is_law(&content) {
         chunk_law(&content, &title, rel, &abs_str)
     } else if count_qa_pairs(&content) >= 2 {
@@ -236,7 +217,6 @@ pub fn chunk_file(abs: &Path, rel: &str) -> Vec<DocumentChunk> {
         chunk_plain(&content, &title, rel, &abs_str)
     }
 }
-
 /// 全量扫描（测试/验证工具用）：清单 + 逐文件切块
 pub fn scan_folder(root: &Path) -> Result<Vec<DocumentChunk>, String> {
     let mut all = Vec::new();
@@ -245,7 +225,6 @@ pub fn scan_folder(root: &Path) -> Result<Vec<DocumentChunk>, String> {
     }
     Ok(all)
 }
-
 /// push 前统一修整：去首尾空行、压缩行尾空白
 fn finalize(buf: &mut String) -> Option<String> {
     let text = buf.trim().to_string();
@@ -255,7 +234,6 @@ fn finalize(buf: &mut String) -> Option<String> {
     }
     Some(text)
 }
-
 /// 法规：按"条"切分，跟踪 编/章/节；面包屑 = [文档标题, ..., "第X条"]
 fn chunk_law(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
     let mut out = Vec::new();
@@ -264,7 +242,6 @@ fn chunk_law(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentCh
     let mut start_line = 1usize;
     let mut cur_article: Option<String> = None;
     let mut ln = 1usize;
-
     for line in content.lines() {
         let t = line.trim_end();
         if let Some(c) = re_chapter().captures(t) {
@@ -331,7 +308,6 @@ fn chunk_law(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentCh
     // 法规文件的普通前言（如目录说明）也保留
     out
 }
-
 /// 问答：问/答成对切块，面包屑 = [文档标题, "问N: 题干前 24 字"]
 fn chunk_qa(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
     let mut out = Vec::new();
@@ -340,7 +316,6 @@ fn chunk_qa(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChu
     let mut qno = 0usize;
     let mut qtext = String::new();
     let mut ln = 1usize;
-
     let flush = |buf: &mut String, out: &mut Vec<DocumentChunk>, start: usize, no: usize, q: &str| {
         if let Some(text) = finalize(buf) {
             let head: String = q.chars().take(24).collect();
@@ -356,7 +331,6 @@ fn chunk_qa(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChu
             ));
         }
     };
-
     for line in content.lines() {
         let t = line.trim_end();
         if let Some(c) = re_q().captures(t) {
@@ -378,11 +352,9 @@ fn chunk_qa(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChu
     flush(&mut buf, &mut out, start_line, qno, &qtext);
     out
 }
-
 /// Markdown：标题树切块（pulldown-cmark，正确处理代码围栏/表格）
 fn chunk_markdown(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-
     // 行首字节偏移表：byte -> line
     let mut line_starts = vec![0usize];
     for (i, b) in content.bytes().enumerate() {
@@ -390,13 +362,11 @@ fn chunk_markdown(content: &str, title: &str, rel: &str, abs: &str) -> Vec<Docum
             line_starts.push(i + 1);
         }
     }
-
     let mut out = Vec::new();
     let mut stack: Vec<(usize, String)> = Vec::new(); // (level, 标题文本)
     let mut buf = String::new();
     let mut sec_start_byte = 0usize;
     let mut in_heading = false;
-
     for (ev, range) in Parser::new_ext(content, Options::ENABLE_TABLES).into_offset_iter() {
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {
@@ -452,7 +422,6 @@ fn chunk_markdown(content: &str, title: &str, rel: &str, abs: &str) -> Vec<Docum
     flush_md(&mut buf, &mut out, &stack, title, rel, abs, sec_start_byte, &line_starts);
     out
 }
-
 /// 收尾一个 Markdown 段块：面包屑 = [文档标题, ...标题栈]
 fn flush_md(
     buf: &mut String,
@@ -475,7 +444,6 @@ fn flush_md(
         out.push(chunk(TYPE_MANUAL, bc, title, rel, abs, text, line));
     }
 }
-
 /// 纯文本兜底：按空行分段
 fn chunk_plain(content: &str, title: &str, rel: &str, abs: &str) -> Vec<DocumentChunk> {
     let mut out = Vec::new();
@@ -502,7 +470,6 @@ fn chunk_plain(content: &str, title: &str, rel: &str, abs: &str) -> Vec<Document
     }
     out
 }
-
 #[allow(clippy::too_many_arguments)]
 fn chunk(
     doc_type: &str,
@@ -523,7 +490,6 @@ fn chunk(
         line,
     }
 }
-
 /// 供测试与工具核对面包屑组装
 pub fn law_breadcrumb(title: &str, stack: &[String], article: &str) -> Vec<String> {
     let mut bc = vec![title.to_string()];
@@ -531,7 +497,6 @@ pub fn law_breadcrumb(title: &str, stack: &[String], article: &str) -> Vec<Strin
     bc.push(article.to_string());
     bc
 }
-
 /// (调试用) 统计各类型块数
 pub fn stats_by_type(chunks: &[DocumentChunk]) -> HashMap<&str, usize> {
     let mut m: HashMap<&str, usize> = HashMap::new();

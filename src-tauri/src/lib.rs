@@ -266,7 +266,7 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
         if !cfg.roots.iter().any(|r| r.path == dir_str) {
             cfg.roots.push(config::KnowledgeRoot {
                 path: dir_str.clone(),
-                label: config::basename_of(&dir_str),
+                label: scope::basename_of(&dir_str),
                 enabled: true,
             });
         }
