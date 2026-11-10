@@ -375,6 +375,7 @@ function openSettings() {
     $setPin.checked = cfg.pin_mode;
   }
   renderRootsEditor();
+  renderStats();
   invoke("get_synonyms")
     .then((s) => { $setSynonyms.value = s; })
     .catch(() => { $setSynonyms.value = "{}"; });
@@ -613,3 +614,30 @@ listen("ui-reset", () => {
   }
   $q.focus();
 })();
+
+/* 索引统计仪表盘 */
+async function renderStats() {
+  const $grid = document.getElementById("index-stats");
+  const $typeRow = document.getElementById("stat-type-row");
+  const $rootRow = document.getElementById("stat-root-row");
+  try {
+    const s = await invoke("get_index_stats");
+    if (!s.total_docs) { $grid.hidden = true; return; }
+    $grid.hidden = false;
+    const max = Math.max(...Object.values(s.by_type), 1);
+    $typeRow.innerHTML = Object.entries(s.by_type)
+      .filter(([,v]) => v > 0)
+      .map(([k, v]) => {
+        const label = TYPE_LABEL[k] || k;
+        const pct = Math.round((v / max) * 100);
+        return `<div class="stat-bar-item"><span class="badge badge-${k.toLowerCase()}">${label}</span><div class="stat-bar"><div style="width:${pct}%"></div></div><span class="stat-num">${v}</span></div>`;
+      }).join("");
+    const roots = Object.entries(s.by_root).filter(([,v]) => v > 0).sort((a,b) => b[1]-a[1]);
+    const maxRoot = Math.max(...roots.map(([,v]) => v), 1);
+    $rootRow.innerHTML = roots
+      .map(([k, v]) => {
+        const pct = Math.round((v / maxRoot) * 100);
+        return `<div class="stat-bar-item"><span class="stat-lib">${escapeHtml(k)}</span><div class="stat-bar"><div style="width:${pct}%"></div></div><span class="stat-num">${v}</span></div>`;
+      }).join("");
+  } catch (_) { $grid.hidden = true; }
+}

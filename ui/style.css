@@ -485,3 +485,39 @@ html, body {
 .set-btns button svg { width: 13px; height: 13px; flex: none; }
 .set-btns button:hover { background: var(--btn-bg-hover); }
 .set-btns .danger:hover { background: rgba(229, 72, 77, 0.15); color: var(--danger); }
+.stat-grid { flex: none; padding: 8px 14px 0; }
+.stat-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.stat-bar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.stat-bar {
+  flex: 1;
+  height: 10px;
+  background: var(--btn-bg);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.stat-bar > div {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 5px;
+  transition: width 0.3s;
+}
+.stat-num {
+  flex: none;
+  width: 36px;
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.stat-lib {
+  flex: none;
+  width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
