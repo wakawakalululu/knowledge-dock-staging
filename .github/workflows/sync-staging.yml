@@ -1,0 +1,23 @@
+name: sync-staging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sync from staging
+        run: |
+          git config user.name "sync-bot"
+          git config user.email "sync@bot.local"
+          git remote add staging https://github.com/wakawakalululu/knowledge-dock-staging.git
+          git fetch staging main
+          git checkout -B sync-branch staging/main
+          git push origin sync-branch:main --force
