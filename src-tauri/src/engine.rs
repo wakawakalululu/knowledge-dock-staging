@@ -126,6 +126,8 @@ pub struct SearchResponse {
     pub hits: Vec<Hit>,
     /// 实际参与匹配的词（含同义词展开），供前端高亮
     pub terms: Vec<String>,
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -532,7 +534,7 @@ impl Engine {
     ) -> SearchResponse {
         let q = query.trim();
         if q.is_empty() {
-            return SearchResponse { hits: Vec::new(), terms: Vec::new() };
+            return SearchResponse { hits: Vec::new(), terms: Vec::new(), duration_ms: 0 };
         }
 
         // 1. jieba 分词 + 词元清洗：仅保留字母数字（和数字上下文的 . -），剔除中英文标点
@@ -561,7 +563,7 @@ impl Engine {
             terms = filtered;
         }
         if terms.is_empty() {
-            return SearchResponse { hits: Vec::new(), terms: Vec::new() };
+            return SearchResponse { hits: Vec::new(), terms: Vec::new(), duration_ms: 0 };
         }
 
         // 2. 同义词展开（零网络、零模型，纯静态词典）
@@ -619,7 +621,7 @@ impl Engine {
             clauses.push((Occur::Should, q));
         }
         if clauses.is_empty() {
-            return SearchResponse { hits: Vec::new(), terms: effective };
+            return SearchResponse { hits: Vec::new(), terms: effective, duration_ms: 0 };
         }
         let query = BooleanQuery::new(clauses);
 
@@ -627,7 +629,7 @@ impl Engine {
         let searcher = self.reader.searcher();
         let top = match searcher.search(&query, &TopDocs::with_limit(limit)) {
             Ok(t) => t,
-            Err(_) => return SearchResponse { hits: Vec::new(), terms: effective },
+            Err(_) => return SearchResponse { hits: Vec::new(), terms: effective, duration_ms: 0 },
         };
 
         let mut hits = Vec::new();
@@ -667,7 +669,7 @@ impl Engine {
                 score,
             });
         }
-        SearchResponse { hits, terms: effective }
+        SearchResponse { hits, terms: effective, duration_ms: 0 }
     }
 }
 

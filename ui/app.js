@@ -43,6 +43,7 @@ let ctxOpen = {};         // 命中项上下文展开状态
 let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下沉引擎）
 let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
+let searchLimit = 50;     // 当前搜索结果上限（分页递增）
 
 const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
 const TYPE_ALIAS = {
@@ -245,6 +246,15 @@ function render(query) {
     el.addEventListener("mousemove", () => setActive(Number(el.dataset.pos)));
   });
   // 上下文展开按钮（阻止冒泡，不触发打开文件）
+  // 加载更多按钮
+  const moreBtn = $resList.querySelector(".load-more-btn");
+  if (moreBtn) {
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      searchLimit += 50;
+      doSearch();
+    });
+  }
   $resList.querySelectorAll(".ctx-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -336,6 +346,18 @@ async function doSearch() {
   ctxOpen = {};
   active = hits.length ? 0 : -1;
   render(parsed.q);
+  if (r.duration_ms) {
+    $resCount.textContent = `${visible.length} 条结果 · ${r.duration_ms}ms`;
+  }
+  // If we got exactly the limit, there might be more results
+  if (hits.length >= searchLimit) {
+    const btn = document.createElement("button");
+    btn.className = "load-more-btn";
+    btn.textContent = "加载更多…";
+    btn.style.cssText = "display:block;width:100%;padding:8px;border:none;background:var(--btn-bg);color:var(--accent);cursor:pointer;font-size:12px;border-radius:6px;margin-top:4px;";
+    btn.addEventListener("click", () => { searchLimit += 50; doSearch(); });
+    $resList.appendChild(btn);
+  }
   recordSearch(parsed.q);
 }
 

@@ -2232,10 +2232,11 @@ dependencies = [
 
 [[package]]
 name = "knowledge-dock"
-version = "0.5.5"
+version = "0.6.0"
 dependencies = [
  "jieba-rs",
  "notify",
+ "once_cell",
  "open",
  "pulldown-cmark",
  "regex",

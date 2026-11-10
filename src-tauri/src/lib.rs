@@ -229,10 +229,13 @@ fn search(
     root_filter: Option<String>,
     state: State<'_, AppState>,
 ) -> SearchResponse {
-    state
-        .engine
-        .search(&q, 50, type_filter.as_deref(), root_filter.as_deref())
+    let start = std::time::Instant::now();
+    let mut resp = state.engine.search(&q, searchLimit(), type_filter.as_deref(), root_filter.as_deref());
+    resp.duration_ms = start.elapsed().as_millis() as u64;
+    resp
 }
+
+fn searchLimit() -> usize { 50 }
 
 /// 添加搜索记录到历史（去重、最新在前、最多 20 条），返回更新后的历史
 #[tauri::command]

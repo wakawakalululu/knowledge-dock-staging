@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 use walkdir::WalkDir;
-const EXTS: [&str; 3] = ["md", "markdown", "txt"];
+const EXTS: [&str; 5] = ["md", "markdown", "txt", "html", "htm"];
 const IGNORE_DIRS: [&str; 6] = [
     "node_modules", "target", "dist", "__pycache__", ".git", ".obsidian",
 ];
@@ -208,6 +208,13 @@ pub fn chunk_file(abs: &Path, rel: &str) -> Vec<DocumentChunk> {
         .unwrap_or_default();
     let title = extract_title(&content, &stem);
     let abs_str = abs.to_string_lossy().to_string();
+    let content = if rel.to_lowercase().ends_with(".html") || rel.to_lowercase().ends_with(".htm") {
+        // HTML 文件：剥离标签提取纯文本
+        strip_html_tags(&content)
+    } else {
+        content
+    };
+
     if is_law(&content) {
         chunk_law(&content, &title, rel, &abs_str)
     } else if count_qa_pairs(&content) >= 2 {
@@ -471,6 +478,19 @@ fn chunk_plain(content: &str, title: &str, rel: &str, abs: &str) -> Vec<Document
     }
     out
 }
+/// 剥离 HTML 标签提取纯文本（简单正则方案，无需额外依赖）
+fn strip_html_tags(html: &str) -> String {
+    use once_cell::sync::Lazy;
+    static RE_SCRIPT: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"(?is)<(script|style)[^>]*>.*?</\1>").unwrap());
+    static RE_TAG: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"<[^>]+>").unwrap());
+    let s = RE_SCRIPT.replace_all(html, " ");
+    let s = RE_TAG.replace_all(&s, " ");
+    // 压缩连续空白
+    let re_ws = regex::Regex::new(r"s{2,}").unwrap();
+    re_ws.replace_all(&s, "
+").trim().to_string()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn chunk(
     doc_type: &str,

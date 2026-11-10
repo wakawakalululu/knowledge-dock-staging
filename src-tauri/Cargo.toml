@@ -1,6 +1,6 @@
 [package]
 name = "knowledge-dock"
-version = "0.5.5"
+version = "0.6.0"
 description = "uTools 风格的本地知识库悬浮检索工具"
 edition = "2021"
 
@@ -25,6 +25,7 @@ tantivy = "0.25"
 jieba-rs = "0.7"
 pulldown-cmark = "0.13"
 regex = "1"
+once_cell = "1"
 
 [profile.release]
 strip = true

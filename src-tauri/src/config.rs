@@ -88,6 +88,13 @@ pub fn load(app: &tauri::AppHandle) -> Config {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     migrate(&mut cfg);
+    // 容错校验：无效值回退默认
+    if cfg.width < 320.0 || cfg.width > 1600.0 { cfg.width = 600.0; }
+    if cfg.roots.iter().any(|r| r.path.is_empty()) {
+        cfg.roots.retain(|r| !r.path.is_empty());
+    }
+    if cfg.scope.max_file_kb == 0 { cfg.scope.max_file_kb = 4096; }
+    if cfg.scope.include_exts.is_empty() { cfg.scope.include_exts = vec!["md".into(), "markdown".into(), "txt".into()]; }
     cfg
 }
 

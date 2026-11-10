@@ -549,3 +549,18 @@ html, body {
   word-break: break-all;
   white-space: pre-wrap;
 }
+
+.load-more-btn {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  background: var(--btn-bg);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  border-radius: 6px;
+  margin-top: 4px;
+}
+.load-more-btn:hover { background: var(--btn-bg-hover); }
