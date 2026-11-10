@@ -174,6 +174,22 @@ async function loadHistory() {
   } catch (_) { searchHistory = []; }
 }
 
+
+function renderCtx(data, origIdx) {
+  if (!data) return '<div class="hit-ctx">加载中…</div>';
+  if (typeof data === "string") return `<div class="hit-ctx">${escapeHtml(data)}</div>`;
+  const h = hits[origIdx];
+  if (!h) return `<div class="hit-ctx">${escapeHtml(JSON.stringify(data))}</div>`;
+  const lines = data.content.split("
+");
+  const html = lines.map((line, idx) => {
+    const lineNo = data.start_line + idx;
+    const isMatch = lineNo >= h.line && lineNo < h.line + 1;
+    return `<div class="ctx-line${isMatch ? " ctx-match" : ""}"><span class="ctx-ln">${lineNo}</span><span class="ctx-text">${escapeHtml(line)}</span></div>`;
+  }).join("");
+  return `<div class="hit-ctx">${html}</div>`;
+}
+
 /* ---------- 渲染 ---------- */
 function render(query) {
   visible = filteredHits();
@@ -203,7 +219,7 @@ function render(query) {
         : "";
       const open = ctxOpen[i];
       const ctx = open
-        ? `<div class="hit-ctx">${ctxCache[i] ? escapeHtml(ctxCache[i]) : "加载中…"}</div>`
+        ? renderCtx(ctxCache[i], i)
         : "";
       return `
       <div class="hit ${pos === active ? "active" : ""}" data-pos="${pos}">

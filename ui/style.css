@@ -521,3 +521,31 @@ html, body {
   white-space: nowrap;
   color: var(--text-dim);
 }
+
+.ctx-line {
+  display: flex;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ctx-line.ctx-match {
+  background: var(--mark-bg);
+  color: var(--mark-text);
+  border-radius: 3px;
+}
+.ctx-ln {
+  flex: none;
+  width: 36px;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--text-dim);
+  opacity: 0.5;
+  font-family: Consolas, monospace;
+  user-select: none;
+}
+.ctx-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  white-space: pre-wrap;
+}

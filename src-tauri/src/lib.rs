@@ -54,6 +54,14 @@ struct PickResult {
     error: Option<String>,
 }
 
+#[derive(Serialize)]
+struct ContextResult {
+    content: String,
+    start_line: usize,
+    end_line: usize,
+    match_line: usize,
+}
+
 /// 后台执行一次多根同步并推送统计
 fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
@@ -434,7 +442,7 @@ fn expand_context(
     before: usize,
     after: usize,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> Result<ContextResult, String> {
     let roots = state.cfg.lock().expect("cfg lock").root_pairs();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
@@ -452,11 +460,16 @@ fn expand_context(
     let content = String::from_utf8_lossy(&raw);
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() {
-        return Ok(String::new());
+        return Ok(ContextResult { content: String::new(), start_line: 0, end_line: 0, match_line: 0 });
     }
     let start = line.saturating_sub(before).max(1);
     let end = (line + after).min(lines.len());
-    Ok(lines[start - 1..end].join("\n"))
+    Ok(ContextResult {
+        content: lines[start - 1..end].join("\n"),
+        start_line: start,
+        end_line: end,
+        match_line: line,
+    })
 }
 
 #[tauri::command]
