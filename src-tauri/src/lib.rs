@@ -346,6 +346,54 @@ fn save_synonyms(app: AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 导出配置到用户选择的 JSON 文件
+#[tauri::command]
+fn export_config(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let cfg = state.cfg.lock().expect("cfg lock").clone();
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    state.dialog_open.store(true, Ordering::SeqCst);
+    let (tx, rx) = std::sync::mpsc::channel::<Option<tauri_plugin_dialog::FilePath>>();
+    app.dialog().file().set_file_name("knowledge-dock-config.json").save_file(move |fp| {
+        let _ = tx.send(fp);
+    });
+    let picked = rx.recv().map_err(|e| e.to_string());
+    state.dialog_open.store(false, Ordering::SeqCst);
+    let picked = picked?;
+    let Some(fp) = picked else { return Err("已取消".into()) };
+    let Some(path) = fp.as_path() else { return Err("路径无效".into()) };
+    std::fs::write(path, &json).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 从用户选择的 JSON 文件导入配置（含快捷键换绑 + 多根重建）
+#[tauri::command]
+fn import_config(app: AppHandle, state: State<'_, AppState>) -> Result<Config, String> {
+    use tauri_plugin_dialog::DialogExt;
+    state.dialog_open.store(true, Ordering::SeqCst);
+    let (tx, rx) = std::sync::mpsc::channel::<Option<tauri_plugin_dialog::FilePath>>();
+    app.dialog().file().add_filter("JSON", &["json"]).pick_file(move |fp| {
+        let _ = tx.send(fp);
+    });
+    let picked = rx.recv().map_err(|e| e.to_string());
+    state.dialog_open.store(false, Ordering::SeqCst);
+    let picked = picked?;
+    let Some(fp) = picked else { return Err("已取消".into()) };
+    let Some(path) = fp.as_path() else { return Err("路径无效".into()) };
+    let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let cfg: Config = serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))?;
+    apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
+    *state.cfg.lock().expect("cfg lock") = cfg.clone();
+    config::save(&app, &cfg);
+    let roots = cfg.root_pairs();
+    if !roots.is_empty() {
+        let scope = cfg.scope.clone();
+        let _ = state.engine.sync_roots(&roots, &scope);
+        start_watchers(&app);
+    }
+    Ok(cfg)
+}
+
 /// 就地展开上下文：读取源文件命中块前 N 行 + 后 M 行（不打开源文件）
 /// 安全：仅允许读取任一知识库根目录内的文件
 #[tauri::command]
@@ -545,6 +593,8 @@ pub fn run() {
             expand_context,
             get_synonyms,
             save_synonyms,
+            export_config,
+            import_config,
             open_file,
             reveal_file,
             hide_window,
