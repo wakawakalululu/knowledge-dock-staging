@@ -7,6 +7,7 @@
 //!
 //! 检索与打分在 engine.rs（Tantivy BM25 + jieba 分词）。
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 use walkdir::WalkDir;

@@ -2,7 +2,8 @@
 //! 存于系统应用配置目录下的 config.json
 //! 数据模型在 scope.rs（无 tauri 依赖，独立工具可挂载）
 
-use crate::scope::{basename_of, KnowledgeRoot, ScopeConfig};
+pub use crate::scope::KnowledgeRoot;
+use crate::scope::{basename_of, ScopeConfig};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
