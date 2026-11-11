@@ -56,6 +56,7 @@
     <div id="settings" class="card-panel" hidden>
       <div class="tabs" id="settings-tabs">
         <button class="tab active" data-tab="scope">范围</button>
+        <button class="tab" data-tab="sync">同步</button>
         <button class="tab" data-tab="general">通用</button>
         <button class="tab" data-tab="synonyms">同义词</button>
       </div>
@@ -92,6 +93,24 @@
             <span class="lbl">上限 KB</span>
             <input id="set-maxkb" class="set-input" type="number" min="64" step="64" />
           </div>
+        </div>
+      </div>
+
+      <div class="tab-pane" id="tab-sync" hidden>
+        <div class="set-col">
+          <span class="lbl-line">Git 仓库（最小克隆到本地后参与检索，内容与本地目录统一全文搜索）</span>
+          <div id="git-list"></div>
+          <input id="git-url" class="set-input mono" placeholder="仓库 URL：https://github.com/user/repo.git（私有库可在 URL 内带 token）" spellcheck="false" />
+          <div class="set-row git-add-row">
+            <input id="git-name" class="set-input" placeholder="显示名（留空取仓库名）" spellcheck="false" />
+            <input id="git-branch" class="set-input" placeholder="分支（留空=默认）" spellcheck="false" />
+            <input id="git-interval" class="set-input" type="number" min="0" step="5" value="30" title="自动更新间隔（分钟），0=仅手动" />
+            <button id="btn-git-add" class="mini-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m5 12 7 7 7-7" transform="rotate(180 12 12)"/></svg>
+              克隆并添加
+            </button>
+          </div>
+          <span class="lbl-line dim">间隔分钟 = 定时自动拉取（0 = 仅手动更新）；依赖系统已安装的 git 命令</span>
         </div>
       </div>
 

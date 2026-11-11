@@ -22,6 +22,33 @@ pub struct ScopePreset {
     pub include_exts: Vec<String>,
 }
 
+/// Git 仓库同步源：最小克隆到本地目录后注册为知识根，参与统一检索；
+/// interval_min>0 时由后台线程定时拉取更新（0 = 仅手动）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitRepoSource {
+    /// 显示名（同时是克隆目录名与 @前缀标签）
+    pub name: String,
+    pub url: String,
+    /// 分支；空 = 远端默认分支（克隆成功后回填实际分支）
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default = "default_git_enabled")]
+    pub enabled: bool,
+    /// 自动更新间隔（分钟）
+    #[serde(default)]
+    pub interval_min: u64,
+    /// 最近一次成功同步的 unix 秒
+    #[serde(default)]
+    pub last_sync: u64,
+    /// 最近一次同步的错误信息（成功后清空）
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
+fn default_git_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// v0.3 兼容字段：等价于 knowledge_dirs 单元素；仅作迁移来源保留
@@ -56,6 +83,9 @@ pub struct Config {
     /// 范围预设列表
     #[serde(default)]
     pub presets: Vec<ScopePreset>,
+    /// Git 仓库同步源
+    #[serde(default)]
+    pub git_sources: Vec<GitRepoSource>,
     /// 各范围使用次数（用于排序和统计）
     #[serde(default)]
     pub scope_usage: HashMap<String, u64>,
@@ -174,6 +204,7 @@ impl Default for Config {
             shortcut: DEFAULT_SHORTCUT.to_string(),
             search_history: Vec::new(),
             presets: Vec::new(),
+            git_sources: Vec::new(),
             scope_usage: HashMap::new(),
         }
     }

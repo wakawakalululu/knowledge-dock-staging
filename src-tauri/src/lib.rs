@@ -7,6 +7,7 @@
 pub mod config;
 pub mod scope;
 pub mod engine;
+pub mod gitsync;
 pub mod indexer;
 
 #[cfg(test)]
@@ -18,6 +19,7 @@ use indexer::Stats;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -37,6 +39,8 @@ struct AppState {
     dialog_open: AtomicBool,
     /// 文件监听句柄：替换即关闭旧通道，旧监听线程随之退出
     watcher: Mutex<Option<RecommendedWatcher>>,
+    /// git 操作互斥（克隆/拉取串行，防定时与手动并发冲突）
+    git_lock: Mutex<()>,
 }
 
 /// 拖动节流：窗口移动事件的保存间隔
@@ -657,6 +661,240 @@ fn frontend_ready(app: AppHandle) {
     }
 }
 
+// ---------------- Git 仓库同步 ----------------
+
+/// 克隆仓库的本地根目录
+fn repos_dir(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("knowledge-dock"))
+        .join("repos")
+}
+
+/// 记录某 git 源的同步错误（保存配置供 UI 展示）
+fn git_record_error(app: &AppHandle, name: &str, err: &str) {
+    let state: State<AppState> = app.state();
+    let mut cfg = state.cfg.lock().expect("cfg lock");
+    if let Some(s) = cfg.git_sources.iter_mut().find(|s| s.name == name) {
+        s.last_error = Some(err.to_string());
+    }
+    config::save(app, &cfg);
+}
+
+/// 对单个 git 源执行浅拉取并同步索引（手动与定时共用）
+/// 成功：更新 last_sync、清 last_error、保存配置、增量同步、emit index-updated
+fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
+    let (branch, dir) = {
+        let state: State<AppState> = app.state();
+        let cfg = state.cfg.lock().expect("cfg lock");
+        let src = cfg
+            .git_sources
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| format!("仓库不存在: {name}"))?;
+        (src.branch.clone(), repos_dir(app).join(&src.name))
+    };
+    let state: State<AppState> = app.state();
+    let _guard = state.git_lock.lock().expect("git lock");
+    let msg = gitsync::pull_repo(&dir, &branch)?;
+    // 成功：更新时间戳并触发索引同步（在 git 锁外做引擎同步，避免长持锁）
+    let stats = {
+        let mut cfg = state.cfg.lock().expect("cfg lock");
+        if let Some(s) = cfg.git_sources.iter_mut().find(|s| s.name == name) {
+            s.last_sync = gitsync::now_secs();
+            s.last_error = None;
+        }
+        let roots = cfg.root_pairs();
+        let scope = cfg.scope.clone();
+        config::save(app, &cfg);
+        if roots.is_empty() {
+            None
+        } else {
+            state.engine.sync_roots(&roots, &scope).ok()
+        }
+    };
+    if let Some(st) = stats {
+        let _ = app.emit("index-updated", &st);
+    }
+    Ok(msg)
+}
+
+/// 定时调度线程：每 30s 检查到期的 git 源并拉取（enabled 且 interval_min>0）
+fn start_git_scheduler(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(30));
+        let now = gitsync::now_secs();
+        let due: Vec<String> = {
+            let state: State<AppState> = handle.state();
+            let cfg = match state.cfg.lock() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            cfg.git_sources
+                .iter()
+                .filter(|s| {
+                    s.enabled
+                        && s.interval_min > 0
+                        && (s.last_sync == 0 || now.saturating_sub(s.last_sync) >= s.interval_min * 60)
+                })
+                .map(|s| s.name.clone())
+                .collect()
+        };
+        for name in due {
+            if let Err(e) = git_pull_one(&handle, &name) {
+                git_record_error(&handle, &name, &e);
+                let _ = handle.emit("git-sync-error", serde_json::json!({ "name": name, "error": e }));
+            }
+        }
+    });
+}
+
+/// 克隆仓库并注册为知识根（网络操作，异步防 UI 卡顿）
+#[tauri::command]
+async fn git_clone(
+    app: AppHandle,
+    url: String,
+    branch: String,
+    name: String,
+    interval_min: u64,
+) -> Result<Config, String> {
+    tauri::async_runtime::spawn_blocking(move || git_clone_blocking(&app, url, branch, name, interval_min))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+fn git_clone_blocking(
+    app: &AppHandle,
+    url: String,
+    branch: String,
+    name: String,
+    interval_min: u64,
+) -> Result<Config, String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("仓库 URL 不能为空".into());
+    }
+    // 显示名：留空则从 URL 推导
+    let name = if name.trim().is_empty() {
+        gitsync::name_from_url(&url)
+    } else {
+        name.trim().to_string()
+    };
+    let name = gitsync::sanitize_name(&name).ok_or("显示名只能包含字母/数字/-/_")?;
+
+    let state: State<AppState> = app.state();
+    {
+        let cfg = state.cfg.lock().expect("cfg lock");
+        if cfg.git_sources.iter().any(|s| s.name == name) {
+            return Err(format!("同名仓库已存在: {name}"));
+        }
+    }
+
+    let dir = repos_dir(app).join(&name);
+    let _guard = state.git_lock.lock().expect("git lock");
+    gitsync::clone_repo(&url, &branch, &dir)?;
+    // 分支留空时回填远端默认分支
+    let branch = if branch.trim().is_empty() {
+        gitsync::current_branch(&dir)?
+    } else {
+        branch.trim().to_string()
+    };
+    drop(_guard);
+
+    let stats = {
+        let mut cfg = state.cfg.lock().expect("cfg lock");
+        let dir_str = dir.to_string_lossy().to_string();
+        cfg.git_sources.push(config::GitRepoSource {
+            name: name.clone(),
+            url: url.clone(),
+            branch: branch.clone(),
+            enabled: true,
+            interval_min,
+            last_sync: gitsync::now_secs(),
+            last_error: None,
+        });
+        // 注册为知识根：.git 目录独立排除（扫描层另有 . 开头目录兜底）
+        if !cfg.roots.iter().any(|r| r.path == dir_str) {
+            cfg.roots.push(config::KnowledgeRoot {
+                path: dir_str,
+                label: name.clone(),
+                enabled: true,
+                root_exclude_globs: vec![".git/".into()],
+            });
+        }
+        let roots = cfg.root_pairs();
+        let scope = cfg.scope.clone();
+        config::save(app, &cfg);
+        if roots.is_empty() {
+            None
+        } else {
+            state.engine.sync_roots(&roots, &scope).ok()
+        }
+    };
+    start_watchers(app);
+    if let Some(st) = stats {
+        let _ = app.emit("index-updated", &st);
+    }
+    let cfg_out = state.cfg.lock().expect("cfg lock").clone();
+    Ok(cfg_out)
+}
+
+/// 手动拉取某仓库更新
+#[tauri::command]
+async fn git_pull(app: AppHandle, name: String) -> Result<Config, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = git_pull_one(&app, &name);
+        let state: State<AppState> = app.state();
+        match result {
+            Ok(_msg) => {
+                let cfg_out = state.cfg.lock().expect("cfg lock").clone();
+                Ok(cfg_out)
+            }
+            Err(e) => {
+                git_record_error(&app, &name, &e);
+                Err(e)
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 移除 git 源（连带删除克隆目录与对应知识根，重新同步索引）
+#[tauri::command]
+async fn git_remove(app: AppHandle, name: String) -> Result<Config, String> {
+    tauri::async_runtime::spawn_blocking(move || git_remove_blocking(&app, name))
+        .await
+        .map_err(|e| format!("任务失败: {e}"))?
+}
+
+fn git_remove_blocking(app: &AppHandle, name: String) -> Result<Config, String> {
+    let state: State<AppState> = app.state();
+    {
+        let mut cfg = state.cfg.lock().expect("cfg lock");
+        let before = cfg.git_sources.len();
+        cfg.git_sources.retain(|s| s.name != name);
+        if cfg.git_sources.len() == before {
+            return Err(format!("仓库不存在: {name}"));
+        }
+        let dir = repos_dir(app).join(&name);
+        cfg.roots
+            .retain(|r| r.path != dir.to_string_lossy().to_string());
+        let roots = cfg.root_pairs();
+        let scope = cfg.scope.clone();
+        config::save(app, &cfg);
+        if !roots.is_empty() {
+            let _ = state.engine.sync_roots(&roots, &scope);
+        }
+    }
+    start_watchers(app);
+    // 删除克隆目录（best-effort，失败不影响配置移除）
+    let _ = gitsync::remove_repo_dir(&repos_dir(app), &name);
+    let cfg_out = state.cfg.lock().expect("cfg lock").clone();
+    Ok(cfg_out)
+}
+
 // ---------------- 位置记忆 ----------------
 
 fn save_position_throttled(app: &AppHandle, x: i32, y: i32) {
@@ -738,6 +976,7 @@ pub fn run() {
                 cfg: Mutex::new(cfg.clone()),
                 dialog_open: AtomicBool::new(false),
                 watcher: Mutex::new(None),
+                git_lock: Mutex::new(()),
             });
 
             // 恢复窗口位置与宽度（越界则保持默认居中）
@@ -784,6 +1023,9 @@ pub fn run() {
                 start_watchers(&handle);
             }
 
+            // git 仓库定时更新调度（每 30s 检查到期源）
+            start_git_scheduler(&handle);
+
             // 兜底：前端异常（如脚本崩溃）无法发出 frontend_ready 时，
             // 3 秒后强制显示窗口，避免应用永远不可见
             let bg = handle.clone();
@@ -829,6 +1071,9 @@ pub fn run() {
             reveal_file,
             hide_window,
             frontend_ready,
+            git_clone,
+            git_pull,
+            git_remove,
             quit_app
         ])
         .on_window_event(|window, event| match event {

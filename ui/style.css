@@ -596,3 +596,41 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Git 同步源列表 */
+.git-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.git-name {
+  max-width: 30%;
+  flex: none;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.git-branch {
+  flex: none;
+  max-width: 18%;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid rgba(127, 127, 127, 0.3);
+  border-radius: 999px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.git-int { flex: none; width: 64px; height: 26px; }
+.git-sync { flex: 1; text-align: right; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.git-err { color: var(--danger); font-weight: 600; cursor: help; }
+.git-add-row { margin-top: 6px; }
+.git-add-row .set-input { height: 28px; }
+.git-add-row #git-name { flex: 1; min-width: 0; }
+.git-add-row #git-branch { flex: none; width: 110px; }
+.git-add-row #git-interval { flex: none; width: 70px; }
+.lbl-line.dim { opacity: 0.65; font-size: 11px; }

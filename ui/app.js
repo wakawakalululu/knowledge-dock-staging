@@ -440,9 +440,46 @@ function renderRootsEditor() {
     : '<div class="empty-sm">尚未添加目录，点击下方按钮选择</div>';
 }
 
+/* ---------- Git 仓库同步 ---------- */
+function relTime(ts) {
+  if (!ts) return "从未";
+  const diff = Math.floor(Date.now() / 1000) - ts;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
+  if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
+  return Math.floor(diff / 86400) + " 天前";
+}
+
+function renderGitList() {
+  const $list = document.getElementById("git-list");
+  if (!$list) return;
+  const repos = (cfg && cfg.git_sources) || [];
+  if (!repos.length) {
+    $list.innerHTML = '<div class="empty-sm">尚未添加 Git 仓库，粘贴 URL 克隆</div>';
+    return;
+  }
+  $list.innerHTML = repos
+    .map((r) => {
+      const syncCell = r.last_error
+        ? `<b class="git-err" title="${escapeHtml(r.last_error)}">失败</b>`
+        : escapeHtml(relTime(r.last_sync));
+      return `
+    <div class="git-row" data-name="${escapeHtml(r.name)}">
+      <span class="git-name" title="${escapeHtml(r.url)}">${escapeHtml(r.name)}</span>
+      <span class="git-branch">${escapeHtml(r.branch || "默认")}</span>
+      <input class="set-input git-int" data-k="interval" type="number" min="0" step="5" value="${r.interval_min || 0}" title="间隔分钟，0=仅手动" />
+      <span class="git-sync">${syncCell}</span>
+      <button class="root-del" data-act="pull">更新</button>
+      <button class="root-del" data-act="del">移除</button>
+    </div>`;
+    })
+    .join("");
+}
+
 function openSettings() {
   settingsOpen = true;
   renderPresetSelect();
+  renderGitList();
   settingsTab = "scope";
   activateTab("scope");
   if (cfg) {
@@ -598,6 +635,73 @@ document.getElementById("btn-del-preset").addEventListener("click", async () => 
   await invoke("delete_scope_preset", { name });
   renderPresetSelect();
 });
+/* Git 仓库：列表操作（更新/移除）与行内间隔编辑 */
+const $gitList = document.getElementById("git-list");
+if ($gitList) {
+  $gitList.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const row = btn.closest(".git-row");
+    const name = row && row.dataset.name;
+    if (!name) return;
+    if (btn.dataset.act === "pull") {
+      $stats.textContent = `更新 ${name} 中…`;
+      try {
+        cfg = await invoke("git_pull", { name });
+        renderGitList();
+        renderRootChips();
+        $stats.textContent = "更新完成，检索内容已刷新";
+      } catch (err) {
+        $stats.textContent = "更新失败: " + err;
+        renderGitList();
+      }
+    } else if (btn.dataset.act === "del") {
+      $stats.textContent = `移除 ${name} 中…`;
+      try {
+        cfg = await invoke("git_remove", { name });
+        renderGitList();
+        renderRootsEditor();
+        renderRootChips();
+        $stats.textContent = "已移除仓库及本地克隆";
+      } catch (err) {
+        $stats.textContent = "移除失败: " + err;
+      }
+    }
+  });
+  // 行内间隔编辑 → 写入本地 cfg（随"保存设置"提交生效）
+  $gitList.addEventListener("change", (e) => {
+    if (e.target.dataset.k !== "interval" || !cfg) return;
+    const row = e.target.closest(".git-row");
+    const src = cfg.git_sources.find((s) => s.name === row.dataset.name);
+    if (src) src.interval_min = Math.max(0, Number(e.target.value) || 0);
+  });
+}
+
+/* Git 仓库：克隆并添加 */
+document.getElementById("btn-git-add").addEventListener("click", async () => {
+  const url = document.getElementById("git-url").value.trim();
+  if (!url) {
+    $stats.textContent = "请填写仓库 URL";
+    return;
+  }
+  const name = document.getElementById("git-name").value.trim();
+  const branch = document.getElementById("git-branch").value.trim();
+  const intervalMin = Math.max(0, Number(document.getElementById("git-interval").value) || 0);
+  $stats.textContent = "克隆中…（私有库首次可能弹出凭证窗口）";
+  try {
+    cfg = await invoke("git_clone", { url, branch, name, intervalMin });
+    document.getElementById("git-url").value = "";
+    document.getElementById("git-name").value = "";
+    document.getElementById("git-branch").value = "";
+    renderGitList();
+    renderRootsEditor();
+    renderRootChips();
+    $stats.textContent = "克隆完成，已加入检索";
+  } catch (err) {
+    $stats.textContent = "克隆失败: " + err;
+  }
+});
+
 /* 选择并添加目录（追加语义，多库混检） */
 document.getElementById("btn-pick").addEventListener("click", async () => {
   $stats.textContent = "扫描中…";
