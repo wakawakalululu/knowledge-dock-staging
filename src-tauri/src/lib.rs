@@ -388,7 +388,60 @@ fn save_stopwords(app: AppHandle, text: String) -> Result<(), String> {
     state.engine.reload_stopwords(set);
     Ok(())
 }
-/// 导出配置到用户选择的 JSON 文件
+
+
+/// 保存当前配置为命名范围预设
+#[tauri::command]
+fn save_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut cfg = state.cfg.lock().expect("cfg lock");
+    let name = name.trim().to_string();
+    if name.is_empty() { return Err("预设名不能为空".into()); }
+    let roots = cfg.roots.clone();
+    let excludes = cfg.scope.exclude_globs.clone();
+    let exts = cfg.scope.include_exts.clone();
+    cfg.presets.retain(|p| p.name != name);
+    cfg.presets.push(config::ScopePreset { name, roots, exclude_globs: excludes, include_exts: exts });
+    let cfg_clone = cfg.clone();
+    drop(cfg);
+    config::save(&app, &cfg_clone);
+    Ok(())
+}
+
+/// 加载范围预设（覆盖当前 roots + scope）
+#[tauri::command]
+fn load_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<Config, String> {
+    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    let preset = cfg.presets.iter().find(|p| p.name == name)
+        .ok_or_else(|| format!("预设不存在: {name}"))?;
+    cfg.roots = preset.roots.clone();
+    cfg.scope.exclude_globs = preset.exclude_globs.clone();
+    cfg.scope.include_exts = preset.include_exts.clone();
+    // 记录使用次数
+    *cfg.scope_usage.entry(name).or_insert(0) += 1;
+    config::save(&app, &cfg);
+    start_watchers(&app);
+    let roots = cfg.root_pairs();
+    let scope = cfg.scope.clone();
+    let _ = state.engine.sync_roots(&roots, &scope);
+    Ok(cfg)
+}
+
+/// 删除范围预设
+#[tauri::command]
+fn delete_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut cfg = state.cfg.lock().expect("cfg lock");
+    cfg.presets.retain(|p| p.name != name);
+    let cfg_clone = cfg.clone();
+    drop(cfg);
+    config::save(&app, &cfg_clone);
+    Ok(())
+}
+
+/// 列出所有范围预设
+#[tauri::command]
+fn list_scope_presets(state: State<'_, AppState>) -> Vec<config::ScopePreset> {
+    state.cfg.lock().expect("cfg lock").presets.clone()
+}/// 导出配置到用户选择的 JSON 文件
 #[tauri::command]
 fn export_config(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -646,6 +699,10 @@ pub fn run() {
             save_synonyms,
             get_stopwords,
             save_stopwords,
+            save_scope_preset,
+            load_scope_preset,
+            delete_scope_preset,
+            list_scope_presets,
             export_config,
             import_config,
             open_file,

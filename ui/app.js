@@ -191,6 +191,34 @@ function renderCtx(data, origIdx) {
   return `<div class="hit-ctx">${html}</div>`;
 }
 
+
+/* ---------- 范围预设 ---------- */
+function renderPresetSelect() {
+  const $sel = document.getElementById("preset-select");
+  const presets = (cfg && cfg.presets) || [];
+  $sel.innerHTML = '<option value="">选择预设…</option>' +
+    presets.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+}
+
+async function applyPreset(name) {
+  if (!name) return;
+  try {
+    cfg = await invoke("load_scope_preset", { name });
+    applyPin();
+    renderRootsEditor();
+    renderRootChips();
+    $setExcludes.value = (cfg.scope.exclude_globs || []).join("
+");
+    $setExts.value = (cfg.scope.include_exts || ["md","markdown","txt"]).join(", ");
+    $setMaxkb.value = cfg.scope.max_file_kb || 4096;
+    const s = await invoke("rescan");
+    $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    doSearch();
+  } catch (e) {
+    $stats.textContent = "加载预设失败: " + e;
+  }
+}
+
 /* ---------- 渲染 ---------- */
 function render(query) {
   visible = filteredHits();
@@ -403,6 +431,7 @@ function renderRootsEditor() {
 
 function openSettings() {
   settingsOpen = true;
+  renderPresetSelect();
   settingsTab = "scope";
   activateTab("scope");
   if (cfg) {
@@ -510,6 +539,32 @@ $chipsRoot.addEventListener("click", (e) => {
   doSearch();
 });
 
+
+/* 范围预设事件 */
+document.getElementById("preset-select").addEventListener("change", (e) => {
+  if (e.target.value) applyPreset(e.target.value);
+});
+
+document.getElementById("btn-save-preset").addEventListener("click", async () => {
+  const name = prompt("预设名称：");
+  if (!name || !name.trim()) return;
+  try {
+    await invoke("save_scope_preset", { name: name.trim() });
+    renderPresetSelect();
+    // 选中刚保存的
+    document.getElementById("preset-select").value = name.trim();
+  } catch (e) {
+    $stats.textContent = "保存预设失败: " + e;
+  }
+});
+
+document.getElementById("btn-del-preset").addEventListener("click", async () => {
+  const sel = document.getElementById("preset-select");
+  const name = sel.value;
+  if (!name) return;
+  await invoke("delete_scope_preset", { name });
+  renderPresetSelect();
+});
 /* 选择并添加目录（追加语义，多库混检） */
 document.getElementById("btn-pick").addEventListener("click", async () => {
   $stats.textContent = "扫描中…";
@@ -645,6 +700,7 @@ listen("ui-reset", () => {
     applyPin();
     renderRootsEditor();
     renderRootChips();
+    renderPresetSelect();
     await loadHistory();
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;

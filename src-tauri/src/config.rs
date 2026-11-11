@@ -5,12 +5,22 @@
 pub use crate::scope::KnowledgeRoot;
 use crate::scope::{basename_of, ScopeConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
 
 pub const DEFAULT_SHORTCUT: &str = "Alt+Space";
 pub const DEFAULT_WIDTH: f64 = 600.0;
+
+/// 范围预设：保存一组知识库根+范围规则的命名快照
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopePreset {
+    pub name: String,
+    pub roots: Vec<KnowledgeRoot>,
+    pub exclude_globs: Vec<String>,
+    pub include_exts: Vec<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -43,6 +53,12 @@ pub struct Config {
     /// 搜索历史（最近 20 条，最新在前）
     #[serde(default)]
     pub search_history: Vec<String>,
+    /// 范围预设列表
+    #[serde(default)]
+    pub presets: Vec<ScopePreset>,
+    /// 各范围使用次数（用于排序和统计）
+    #[serde(default)]
+    pub scope_usage: HashMap<String, u64>,
 }
 
 impl Config {
@@ -141,6 +157,8 @@ impl Default for Config {
             pin_mode: false,
             shortcut: DEFAULT_SHORTCUT.to_string(),
             search_history: Vec::new(),
+            presets: Vec::new(),
+            scope_usage: HashMap::new(),
         }
     }
 }

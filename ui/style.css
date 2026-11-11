@@ -564,3 +564,16 @@ html, body {
   margin-top: 4px;
 }
 .load-more-btn:hover { background: var(--btn-bg-hover); }
+
+.preset-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: none;
+}
+.preset-bar .set-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: 12px;
+}
