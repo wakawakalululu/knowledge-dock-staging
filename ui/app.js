@@ -382,7 +382,9 @@ async function doSearch() {
   ctxCache = {};
   ctxOpen = {};
   active = hits.length ? 0 : -1;
-  render(parsed.q);
+  // 关键：用 updateView 展开窗口+显示结果面板（仅 render 不改窗口形态，
+  // 曾导致"输入后搜索在后台跑但界面无反应"）
+  updateView();
   if (r.duration_ms) {
     $resCount.textContent = `${visible.length} 条结果 · ${r.duration_ms}ms`;
   }

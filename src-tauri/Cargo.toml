@@ -1,6 +1,6 @@
 [package]
 name = "knowledge-dock"
-version = "0.7.2"
+version = "0.7.3"
 description = "uTools 风格的本地知识库悬浮检索工具"
 edition = "2021"
 
