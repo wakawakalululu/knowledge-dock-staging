@@ -4,6 +4,17 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+/* 全局错误兜底：任何未捕获异常直接显示在界面上（透明窗上红条），避免静默黑屏 */
+window.addEventListener("error", (e) => {
+  const el = document.getElementById("err-banner");
+  if (!el) return;
+  el.textContent = "脚本错误: " + (e.message || "未知");
+  el.hidden = false;
+});
+window.addEventListener("unhandledrejection", (e) => {
+  console.error(e.reason);
+});
+
 const $q = document.getElementById("q");
 const $bar = document.getElementById("bar");
 const $btnClear = document.getElementById("btn-clear");
@@ -16,7 +27,6 @@ const $resCount = document.getElementById("res-count");
 const $settings = document.getElementById("settings");
 const $settingsTabs = document.getElementById("settings-tabs");
 const $rootsList = document.getElementById("roots-list");
-const $setDirs = document.getElementById("set-dirs");
 const $setExcludes = document.getElementById("set-excludes");
 const $setExts = document.getElementById("set-exts");
 const $setMaxkb = document.getElementById("set-maxkb");
@@ -181,8 +191,7 @@ function renderCtx(data, origIdx) {
   if (typeof data === "string") return `<div class="hit-ctx">${escapeHtml(data)}</div>`;
   const h = hits[origIdx];
   if (!h) return `<div class="hit-ctx">${escapeHtml(JSON.stringify(data))}</div>`;
-  const lines = data.content.split("
-");
+  const lines = data.content.split("\n");
   const html = lines.map((line, idx) => {
     const lineNo = data.start_line + idx;
     const isMatch = lineNo >= h.line && lineNo < h.line + 1;
@@ -207,8 +216,7 @@ async function applyPreset(name) {
     applyPin();
     renderRootsEditor();
     renderRootChips();
-    $setExcludes.value = (cfg.scope.exclude_globs || []).join("
-");
+    $setExcludes.value = (cfg.scope.exclude_globs || []).join("\n");
     $setExts.value = (cfg.scope.include_exts || ["md","markdown","txt"]).join(", ");
     $setMaxkb.value = cfg.scope.max_file_kb || 4096;
     const s = await invoke("rescan");
@@ -359,8 +367,9 @@ async function doSearch() {
   try {
     r = await invoke("search", {
       q: parsed.q,
-      typeF: parsed.typeF === "all" ? null : parsed.typeF,
-      rootF: parsed.rootF === "all" ? null : parsed.rootF,
+      typeFilter: parsed.typeF === "all" ? null : parsed.typeF,
+      rootFilter: parsed.rootF === "all" ? null : parsed.rootF,
+      limit: searchLimit,
     });
     hits = r.hits;
     lastTerms = r.terms || [];
@@ -466,9 +475,18 @@ function activateTab(name) {
 }
 
 /* ---------- 事件绑定 ---------- */
+/* 自动搜索：输入即搜（150ms 防抖）；中文输入法合成期间不触发，选词完成立即搜 */
+let composing = false;
+$q.addEventListener("compositionstart", () => { composing = true; });
+$q.addEventListener("compositionend", () => {
+  composing = false;
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(doSearch, 50);
+});
 $q.addEventListener("input", () => {
   $btnClear.hidden = !$q.value;
   $historyPanel.hidden = !!$q.value.trim();
+  if (composing) return;
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(doSearch, 150);
 });
@@ -493,6 +511,9 @@ $q.addEventListener("keydown", (e) => {
     e.preventDefault();
     if (visible.length) setActive(Math.max(active - 1, 0));
   } else if (e.key === "Enter") {
+    if (composing) return;
+    clearTimeout(debounceTimer);
+    doSearch();
     if (visible.length) openHit(active < 0 ? 0 : active, e.ctrlKey);
   } else if (e.key === "Escape") {
     // 优先关设置 → 清空输入 → 隐藏（钉住模式不隐藏）
@@ -545,18 +566,28 @@ document.getElementById("preset-select").addEventListener("change", (e) => {
   if (e.target.value) applyPreset(e.target.value);
 });
 
-document.getElementById("btn-save-preset").addEventListener("click", async () => {
-  const name = prompt("预设名称：");
-  if (!name || !name.trim()) return;
+/* 存为预设：WebView2 无 prompt()，用内联输入框命名（Enter 确认 / Esc 取消） */
+const $presetName = document.getElementById("preset-name-input");
+function togglePresetName(show) {
+  $presetName.style.display = show ? "" : "none";
+  $presetName.value = "";
+  if (show) $presetName.focus();
+}
+document.getElementById("btn-save-preset").addEventListener("click", () => togglePresetName(true));
+$presetName.addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  const name = $presetName.value.trim();
+  if (!name) return;
+  togglePresetName(false);
   try {
-    await invoke("save_scope_preset", { name: name.trim() });
+    await invoke("save_scope_preset", { name });
     renderPresetSelect();
-    // 选中刚保存的
-    document.getElementById("preset-select").value = name.trim();
-  } catch (e) {
-    $stats.textContent = "保存预设失败: " + e;
+    document.getElementById("preset-select").value = name;
+  } catch (err) {
+    $stats.textContent = "保存预设失败: " + err;
   }
 });
+$presetName.addEventListener("blur", () => togglePresetName(false));
 
 document.getElementById("btn-del-preset").addEventListener("click", async () => {
   const sel = document.getElementById("preset-select");
@@ -581,11 +612,13 @@ document.getElementById("btn-pick").addEventListener("click", async () => {
   }
 });
 
-document.getElementById("btn-rescan").addEventListener("click", async () => {
+const $btnRescan = document.getElementById("btn-rescan");
+if ($btnRescan) $btnRescan.addEventListener("click", async () => {
   $stats.textContent = "扫描中…";
   try {
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    renderStats();
   } catch (e) {
     $stats.textContent = "扫描失败: " + e;
   }
@@ -713,6 +746,8 @@ listen("ui-reset", () => {
     }
   }
   $q.focus();
+  // 通知主进程：前端就绪，可以显示窗口（避免 webview 未加载完的黑屏/闪块）
+  invoke("frontend_ready").catch(() => {});
 })();
 
 /* 索引统计仪表盘 */

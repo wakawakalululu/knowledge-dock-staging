@@ -44,6 +44,9 @@ static LAST_SAVE_MS: AtomicU64 = AtomicU64::new(0);
 /// 最新窗口位置（物理像素），供退出时兜底保存
 static LAST_X: AtomicI64 = AtomicI64::new(i64::MIN);
 static LAST_Y: AtomicI64 = AtomicI64::new(i64::MIN);
+/// 前端就绪信号：窗口默认隐藏，前端加载完成后调用 frontend_ready 再显示；
+/// 防止 webview 未渲染完成的黑屏/空窗闪烁
+static FRONTEND_SHOWN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize)]
 struct PickResult {
@@ -237,10 +240,16 @@ fn search(
     q: String,
     type_filter: Option<String>,
     root_filter: Option<String>,
+    limit: Option<usize>,
     state: State<'_, AppState>,
 ) -> SearchResponse {
     let start = std::time::Instant::now();
-    let mut resp = state.engine.search(&q, searchLimit(), type_filter.as_deref(), root_filter.as_deref());
+    let mut resp = state.engine.search(
+        &q,
+        limit.unwrap_or_else(searchLimit),
+        type_filter.as_deref(),
+        root_filter.as_deref(),
+    );
     resp.duration_ms = start.elapsed().as_millis() as u64;
     resp
 }
@@ -468,9 +477,8 @@ fn save_stopwords(app: AppHandle, text: String) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("stopwords.json"), serde_json::to_string_pretty(&list).unwrap_or_default())
         .map_err(|e| e.to_string())?;
-    let mut set = engine::load_stopwords(Some(&dir));
     // 用户文件覆盖默认：直接用用户列表
-    set = list.iter().map(|w| w.trim().to_lowercase()).collect();
+    let set = list.iter().map(|w| w.trim().to_lowercase()).collect();
     let state: State<AppState> = app.state();
     state.engine.reload_stopwords(set);
     Ok(())
@@ -641,6 +649,14 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// 前端初始化完成信号：此时 webview 已渲染，显示窗口（消除启动黑屏）
+#[tauri::command]
+fn frontend_ready(app: AppHandle) {
+    if !FRONTEND_SHOWN.swap(true, Ordering::SeqCst) {
+        reveal(&app);
+    }
+}
+
 // ---------------- 位置记忆 ----------------
 
 fn save_position_throttled(app: &AppHandle, x: i32, y: i32) {
@@ -768,6 +784,16 @@ pub fn run() {
                 start_watchers(&handle);
             }
 
+            // 兜底：前端异常（如脚本崩溃）无法发出 frontend_ready 时，
+            // 3 秒后强制显示窗口，避免应用永远不可见
+            let bg = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(3));
+                if !FRONTEND_SHOWN.swap(true, Ordering::SeqCst) {
+                    reveal(&bg);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -802,6 +828,7 @@ pub fn run() {
             open_file,
             reveal_file,
             hide_window,
+            frontend_ready,
             quit_app
         ])
         .on_window_event(|window, event| match event {

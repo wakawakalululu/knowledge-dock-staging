@@ -579,3 +579,20 @@ html, body {
   height: 28px;
   font-size: 12px;
 }
+
+/* 全局脚本错误条幅 */
+.err-banner {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 2px;
+  z-index: 99;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #b91c1c;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

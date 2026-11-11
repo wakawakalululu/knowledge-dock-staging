@@ -8,6 +8,8 @@
 </head>
 <body>
   <div class="app">
+    <!-- 全局脚本错误条幅（正常时隐藏） -->
+    <div id="err-banner" class="err-banner" hidden></div>
     <!-- 极简搜索条：拖拽区域仅限左侧图标（避免拦截按钮点击） -->
     <div class="bar-card" id="bar">
       <span class="s-icon drag-zone" data-tauri-drag-region title="拖动移动窗口">
@@ -67,6 +69,7 @@
           <span class="lbl-line">知识库（显示名 / 启用；输入 @名 可只在库内搜索）</span>
           <div class="preset-bar">
             <select id="preset-select" class="set-input"><option value="">选择预设…</option></select>
+            <input id="preset-name-input" class="set-input" placeholder="预设名称，Enter 确认" style="display:none" spellcheck="false" />
             <button id="btn-save-preset" class="mini-btn" title="保存当前配置为预设">存为预设</button>
             <button id="btn-del-preset" class="mini-btn" title="删除选中预设">删除</button>
           </div>
@@ -74,6 +77,10 @@
           <button id="btn-pick" class="mini-btn">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
             选择并添加目录…
+          </button>
+          <button id="btn-rescan" class="mini-btn" title="重新扫描全部知识库">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+            重新扫描
           </button>
         </div>
         <div class="set-col">
