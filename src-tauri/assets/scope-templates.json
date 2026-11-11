@@ -1,0 +1,26 @@
+[
+  {
+    "name": "全库搜索",
+    "description": "不设排除规则，搜索所有已收录文件",
+    "exclude_globs": [],
+    "include_exts": ["md", "markdown", "txt", "html", "htm"]
+  },
+  {
+    "name": "法律条文检索",
+    "description": "聚焦法律条文类文档，排除笔记和手册",
+    "exclude_globs": ["手册/", "笔记/"],
+    "include_exts": ["md", "txt"]
+  },
+  {
+    "name": "技术文档检索",
+    "description": "聚焦技术文档和手册，排除法规类内容",
+    "exclude_globs": ["法规/"],
+    "include_exts": ["md", "html"]
+  },
+  {
+    "name": "仅 Markdown",
+    "description": "只搜索 Markdown 文件",
+    "exclude_globs": [],
+    "include_exts": ["md", "markdown"]
+  }
+]

@@ -207,6 +207,16 @@ fn save_config(app: AppHandle, cfg: Config, state: State<'_, AppState>) -> Resul
     apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
+    // 自动备份轮换
+    let bdir = app.path().app_config_dir().unwrap_or_default().join("config-backups");
+    let _ = std::fs::create_dir_all(&bdir);
+    if let Ok(cur) = std::fs::read_to_string(app.path().app_config_dir().unwrap_or_default().join("config.json")) {
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = std::fs::write(bdir.join(format!("config-{ts}.json")), cur);
+        let mut bs: Vec<String> = std::fs::read_dir(&bdir).map(|entries| entries.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(String::from)).collect()).unwrap_or_default();
+        bs.sort();
+        while bs.len() > 5 { let _ = std::fs::remove_file(bdir.join(&bs[0])); bs.remove(0); }
+    }
     Ok(cfg)
 }
 
@@ -264,6 +274,82 @@ fn clear_search_history(app: AppHandle, state: State<'_, AppState>) {
     state.cfg.lock().expect("cfg lock").search_history.clear();
     let cfg = state.cfg.lock().expect("cfg lock").clone();
     config::save(&app, &cfg);
+}
+
+/// 获取范围规则模板（内嵌 JSON）
+#[tauri::command]
+fn get_scope_templates() -> String {
+    include_str!("../assets/scope-templates.json").to_string()
+}
+
+/// 应用范围规则模板
+#[tauri::command]
+fn apply_scope_template(name: String, app: AppHandle, state: State<'_, AppState>) -> Result<Config, String> {
+    let templates: Vec<serde_json::Value> = serde_json::from_str(include_str!("../assets/scope-templates.json")).map_err(|e| e.to_string())?;
+    let tpl = templates.iter().find(|t| t["name"] == name).ok_or_else(|| format!("模板不存在: {name}"))?;
+    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    if let Some(ex) = tpl["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
+    if let Some(exts) = tpl["include_exts"].as_array() { cfg.scope.include_exts = exts.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
+    config::save(&app, &cfg);
+    let roots = cfg.root_pairs();
+    let scope = cfg.scope.clone();
+    let _ = state.engine.sync_roots(&roots, &scope);
+    Ok(cfg)
+}
+
+/// 保存配置文件
+#[tauri::command]
+fn save_config_profile(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    let cfg = state.cfg.lock().expect("cfg lock").clone();
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?.join("profiles");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(format!("{name}.json")), json).map_err(|e| e.to_string())
+}
+
+/// 列出配置文件
+#[tauri::command]
+fn list_config_profiles(app: AppHandle) -> Vec<String> {
+    let dir = app.path().app_config_dir().unwrap_or_default().join("profiles");
+    std::fs::read_dir(&dir).map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.file_name().to_str().map(|s| s.ends_with(".json")).unwrap_or(false)).filter_map(|e| e.file_name().to_str().map(|s| s.trim_end_matches(".json").to_string())).collect()).unwrap_or_default()
+}
+
+/// 加载配置文件
+#[tauri::command]
+fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<Config, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let path = dir.join("profiles").join(format!("{name}.json"));
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let cfg: Config = serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))?;
+    apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
+    *state.cfg.lock().expect("cfg lock") = cfg.clone();
+    config::save(&app, &cfg);
+    let roots = cfg.root_pairs();
+    if !roots.is_empty() { let scope = cfg.scope.clone(); let _ = state.engine.sync_roots(&roots, &scope); start_watchers(&app); }
+    Ok(cfg)
+}
+
+/// 导出范围规则 JSON
+#[tauri::command]
+fn export_scope_rules(state: State<'_, AppState>) -> Result<String, String> {
+    let cfg = state.cfg.lock().expect("cfg lock");
+    let data = serde_json::json!({"exclude_globs": cfg.scope.exclude_globs, "include_exts": cfg.scope.include_exts, "max_file_kb": cfg.scope.max_file_kb});
+    Ok(serde_json::to_string_pretty(&data).unwrap_or_default())
+}
+
+/// 导入范围规则 JSON
+#[tauri::command]
+fn import_scope_rules(app: AppHandle, json: String, state: State<'_, AppState>) -> Result<Config, String> {
+    let data: serde_json::Value = serde_json::from_str(&json).map_err(|e| format!("JSON 格式错误: {e}"))?;
+    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    if let Some(ex) = data["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
+    if let Some(exts) = data["include_exts"].as_array() { cfg.scope.include_exts = exts.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
+    if let Some(kb) = data["max_file_kb"].as_u64() { cfg.scope.max_file_kb = kb; }
+    config::save(&app, &cfg);
+    let roots = cfg.root_pairs();
+    let scope = cfg.scope.clone();
+    let _ = state.engine.sync_roots(&roots, &scope);
+    Ok(cfg)
 }
 
 /// 索引统计仪表盘：各类型/各库块数分布
@@ -693,6 +779,13 @@ pub fn run() {
             get_search_history,
             clear_search_history,
             get_index_stats,
+            import_scope_rules,
+            export_scope_rules,
+            load_config_profile,
+            list_config_profiles,
+            save_config_profile,
+            apply_scope_template,
+            get_scope_templates,
             rescan,
             pick_folder,
             expand_context,
