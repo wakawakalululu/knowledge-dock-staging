@@ -12,6 +12,9 @@ pub struct KnowledgeRoot {
     pub label: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 每库独立排除规则（与全局规则合并）
+    #[serde(default)]
+    pub root_exclude_globs: Vec<String>,
 }
 
 fn default_true() -> bool {

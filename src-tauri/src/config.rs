@@ -81,6 +81,21 @@ impl Config {
             })
             .collect()
     }
+
+    /// 同步用 (路径, 显示名, 每库独立排除规则) 三元组
+    pub fn root_triples(&self) -> Vec<(PathBuf, String, Vec<String>)> {
+        self.effective_roots()
+            .into_iter()
+            .map(|r| {
+                let label = if r.label.is_empty() {
+                    basename_of(&r.path)
+                } else {
+                    r.label.clone()
+                };
+                (PathBuf::from(r.path), label, r.root_exclude_globs.clone())
+            })
+            .collect()
+    }
 }
 
 fn default_width() -> f64 {
@@ -130,6 +145,7 @@ fn migrate(cfg: &mut Config) {
             path: d.to_string(),
             label: basename_of(d),
             enabled: true,
+            root_exclude_globs: Vec::new(),
         });
     }
 }

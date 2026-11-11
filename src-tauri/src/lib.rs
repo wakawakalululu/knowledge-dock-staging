@@ -314,6 +314,7 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
                 path: dir_str.clone(),
                 label: scope::basename_of(&dir_str),
                 enabled: true,
+                root_exclude_globs: Vec::new(),
             });
         }
         if cfg.knowledge_dir.is_none() {
