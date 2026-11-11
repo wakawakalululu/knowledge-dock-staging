@@ -64,7 +64,9 @@ html, body {
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
-.s-icon { display: flex; align-items: center; }
+.s-icon { display: flex; align-items: center; cursor: grab; border-radius: 6px; padding: 2px; }
+.s-icon:active { cursor: grabbing; }
+.s-icon:hover { background: var(--hover); }
 .s-icon svg { width: 17px; height: 17px; color: var(--accent); }
 #q {
   flex: 1;
