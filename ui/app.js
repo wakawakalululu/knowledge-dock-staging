@@ -317,6 +317,10 @@ function render(query) {
     el.addEventListener("dblclick", () => openHit(Number(el.dataset.pos), true));
     el.addEventListener("mousemove", () => setActive(Number(el.dataset.pos)));
   });
+  // 当前显示模式随计数一起展示（便于确认切换是否生效）
+  $resCount.textContent = visible.length
+    ? `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode}`
+    : "";
   // 上下文展开按钮（阻止冒泡，不触发打开文件）
   // 加载更多按钮
   const moreBtn = $resList.querySelector(".load-more-btn");
@@ -368,6 +372,8 @@ function setActive(pos) {
   const el = $resList.querySelector(`.hit[data-pos="${pos}"]`);
   if (el) el.scrollIntoView({ block: "nearest" });
 }
+
+const SORT_LABEL = { rel: "相关度", mtime: "最新", group: "按库" };
 
 /** 类型过滤后的可见列表（类型 chips 已下沉引擎，此处按显示模式重排） */
 function filteredHits() {
@@ -439,7 +445,7 @@ async function doSearch() {
   // 曾导致"输入后搜索在后台跑但界面无反应"）
   updateView();
   if (r.duration_ms) {
-    $resCount.textContent = `${visible.length} 条结果 · ${r.duration_ms}ms`;
+    $resCount.textContent = `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode} · ${r.duration_ms}ms`;
   }
   // If we got exactly the limit, there might be more results
   if (hits.length >= searchLimit) {
