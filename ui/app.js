@@ -292,8 +292,8 @@ function render(query) {
         : "";
       // 文件修改时间（最新/分组模式下显示，兼作排序依据的可视化）
       const mt = h.mtime
-        ? `<span class="hit-mtime" title="文件修改时间">${escapeHtml(relTime(Math.floor(h.mtime / 1000)))}</span>`
-        : "";
+        ? `<span class="hit-mtime" title="mtime=${h.mtime}">${escapeHtml(relTime(Math.floor(h.mtime / 1000)))}</span>`
+        : `<span class="hit-mtime" title="mtime=MISSING"></span>`;
       const open = ctxOpen[i];
       const ctx = open
         ? renderCtx(ctxCache[i], i)
