@@ -708,6 +708,9 @@ fn load_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -
     cfg.scope.max_age_days = preset.max_age_days;
     // 记录使用次数
     *cfg.scope_usage.entry(name).or_insert(0) += 1;
+    // 写回全局状态：后续 rescan/搜索/保存都以此为准（此前只改克隆，
+    // 后端仍用旧范围，预设"应用"实际不生效——v0.6.1 起的存量缺陷）
+    *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
     start_watchers(&app);
     let roots = cfg.root_triples();
