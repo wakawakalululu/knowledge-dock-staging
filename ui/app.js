@@ -290,6 +290,10 @@ function render(query) {
       const rootTag = h.root
         ? `<span class="hit-root">${escapeHtml(h.root)}</span>`
         : "";
+      // 文件修改时间（最新/分组模式下显示，兼作排序依据的可视化）
+      const mt = h.mtime
+        ? `<span class="hit-mtime" title="文件修改时间">${escapeHtml(relTime(Math.floor(h.mtime / 1000)))}</span>`
+        : "";
       const open = ctxOpen[i];
       const ctx = open
         ? renderCtx(ctxCache[i], i)
@@ -301,6 +305,7 @@ function render(query) {
           <span class="hit-title">${highlight(h.title, query)}</span>
           ${rootTag}
           <span class="hit-path">${escapeHtml(shortPath(h.path))}</span>
+          ${mt}
           <button class="ctx-btn" data-ctx="${i}" title="展开上下文">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></svg>
           </button>
