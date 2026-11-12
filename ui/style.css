@@ -662,3 +662,4 @@ html, body {
 .chip.preset-chip.active {
   border-style: solid;
 }
+.diag-line.warn-line { color: #b45309; }

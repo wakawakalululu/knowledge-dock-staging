@@ -666,6 +666,63 @@ if ($diagPath && $diagResult) {
   });
 }
 
+/* 配置健康检查 + 一键修复 */
+const $healthResult = document.getElementById("health-result");
+const $btnHealthFix = document.getElementById("btn-health-fix");
+function renderHealth(issues, fixed) {
+  if (!$healthResult) return;
+  $healthResult.hidden = false;
+  if (fixed) {
+    $healthResult.innerHTML = fixed.length
+      ? ['<div class="diag-line final">已修复:</div>']
+          .concat(fixed.map((f) => `<div class="diag-line ok">✓ ${escapeHtml(f)}</div>`))
+          .join("")
+      : '<div class="diag-line ok">✓ 无可修复项</div>';
+    return;
+  }
+  if (!issues.length) {
+    $healthResult.innerHTML = '<div class="diag-line ok">✓ 配置健康，未发现问题</div>';
+    $btnHealthFix.hidden = true;
+    return;
+  }
+  $healthResult.innerHTML = issues
+    .map((it) => {
+      const cls = it.severity === "error" ? "err" : "warn-line";
+      const tag = it.fixable ? " [可修复]" : "";
+      return `<div class="diag-line ${cls}">• ${escapeHtml(it.message)}${tag}</div>`;
+    })
+    .join("");
+  $btnHealthFix.hidden = !issues.some((it) => it.fixable);
+}
+if ($healthResult && $btnHealthFix) {
+  document.getElementById("btn-health").addEventListener("click", async () => {
+    $healthResult.hidden = false;
+    $healthResult.innerHTML = '<div class="diag-line">检查中…</div>';
+    try {
+      const issues = await invoke("health_check");
+      renderHealth(issues);
+    } catch (e) {
+      $healthResult.innerHTML = `<div class="diag-line err">检查失败: ${escapeHtml(String(e))}</div>`;
+    }
+  });
+  $btnHealthFix.addEventListener("click", async () => {
+    $btnHealthFix.disabled = true;
+    try {
+      const [fixed, newCfg] = await invoke("health_fix_all");
+      cfg = newCfg;
+      renderHealth(null, fixed);
+      renderRootsEditor();
+      renderRootChips();
+      renderPresetChips();
+      renderStats();
+    } catch (e) {
+      renderHealth(null, [String(e)]);
+    }
+    $btnHealthFix.disabled = false;
+    $btnHealthFix.hidden = true;
+  });
+}
+
 /* 范围预设事件 */
 document.getElementById("preset-select").addEventListener("change", (e) => {
   if (e.target.value) applyPreset(e.target.value);

@@ -558,6 +558,303 @@ fn scope_check(path: String, state: State<'_, AppState>) -> ScopeCheckResult {
     }
 }
 
+// ---------------- 配置健康检查 ----------------
+
+/// 健康问题条目
+#[derive(Serialize)]
+struct HealthIssue {
+    /// duplicate_root | missing_path | bad_glob | git_source_broken | git_root_missing | bad_value
+    kind: String,
+    /// error | warn
+    severity: String,
+    message: String,
+    fixable: bool,
+}
+
+/// 规则归一化：反斜杠→正斜杠、去空白、去盘符/前导斜杠（相对规则误填绝对路径时）
+fn normalize_rule(r: &str) -> String {
+    let mut s = r.trim().replace('\\', "/").to_string();
+    // 盘符前缀（C:/...）→ 相对化
+    if s.len() >= 2 && s.as_bytes()[1] == b':' {
+        s = s[2..].to_string();
+    }
+    s.trim_start_matches('/').to_string()
+}
+
+/// 收集当前配置的健康问题（与 fix_all 的修复逻辑一一对应）
+fn collect_health_issues(cfg: &Config) -> Vec<HealthIssue> {
+    let mut issues: Vec<HealthIssue> = Vec::new();
+
+    // 1. 重复知识库根（归一化后 path 相同）
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for (i, r) in cfg.roots.iter().enumerate() {
+        let key = r.path.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        if let Some(&first) = seen.get(&key) {
+            issues.push(HealthIssue {
+                kind: "duplicate_root".into(),
+                severity: "error".into(),
+                message: format!(
+                    "重复知识库根: {}（与第 {} 条相同）",
+                    r.path,
+                    first + 1
+                ),
+                fixable: true,
+            });
+        } else {
+            seen.insert(key, i);
+        }
+    }
+
+    // 2. 根目录不存在
+    for r in &cfg.roots {
+        if !std::path::Path::new(&r.path).is_dir() {
+            issues.push(HealthIssue {
+                kind: "missing_path".into(),
+                severity: "error".into(),
+                message: format!("目录不存在: {}（{}）", r.path, r.label),
+                fixable: true,
+            });
+        }
+    }
+
+    // 3. 无效/不规范 glob 规则（全局 + 每库独立）
+    let mut check_rules = |name: &str, rules: &[String], out: &mut Vec<HealthIssue>| {
+        let mut norm_seen: HashMap<String, usize> = HashMap::new();
+        for (i, raw) in rules.iter().enumerate() {
+            if raw.trim().is_empty() {
+                out.push(HealthIssue {
+                    kind: "bad_glob".into(),
+                    severity: "warn".into(),
+                    message: format!("{name} 第 {} 条为空规则", i + 1),
+                    fixable: true,
+                });
+                continue;
+            }
+            let n = normalize_rule(raw);
+            if *raw != n {
+                out.push(HealthIssue {
+                    kind: "bad_glob".into(),
+                    severity: "warn".into(),
+                    message: format!("{name} 第 {} 条「{raw}」含反斜杠/盘符/前导斜杠，将归一为「{n}」", i + 1),
+                    fixable: true,
+                });
+            }
+            let cnt = norm_seen.entry(n).or_insert(0);
+            *cnt += 1;
+            if *cnt == 2 {
+                out.push(HealthIssue {
+                    kind: "bad_glob".into(),
+                    severity: "warn".into(),
+                    message: format!("{name} 存在重复规则「{}」", raw.trim()),
+                    fixable: true,
+                });
+            }
+        }
+    };
+    check_rules("排除规则", &cfg.scope.exclude_globs, &mut issues);
+    check_rules("包含白名单", &cfg.scope.include_globs, &mut issues);
+    for r in &cfg.roots {
+        check_rules(&format!("库「{}」独立排除", r.label), &r.root_exclude_globs, &mut issues);
+    }
+
+    // 4. git 源健康检查需要真实 repos 路径，在 health_check 命令层执行
+
+    // 5. 值域异常
+    if cfg.scope.max_file_kb == 0 {
+        issues.push(HealthIssue {
+            kind: "bad_value".into(),
+            severity: "warn".into(),
+            message: "单文件大小上限为 0（等于禁用所有文件）".into(),
+            fixable: true,
+        });
+    }
+    if cfg.scope.max_age_days > 36500 {
+        issues.push(HealthIssue {
+            kind: "bad_value".into(),
+            severity: "warn".into(),
+            message: format!("时间窗 {} 天异常（超过 100 年）", cfg.scope.max_age_days),
+            fixable: true,
+        });
+    }
+    let bad_exts: Vec<String> = cfg
+        .scope
+        .include_exts
+        .iter()
+        .filter(|e| e.trim().is_empty() || e.starts_with('.') || **e != e.to_lowercase())
+        .cloned()
+        .collect();
+    if !bad_exts.is_empty() {
+        issues.push(HealthIssue {
+            kind: "bad_value".into(),
+            severity: "warn".into(),
+            message: format!("扩展名列表不规范: [{}]（含空项/点前缀/大写）", bad_exts.join(", ")),
+            fixable: true,
+        });
+    }
+
+    issues
+}
+
+/// 配置健康检查：返回问题清单（fixable 项可被 health_fix_all 修复）
+#[tauri::command]
+fn health_check(app: AppHandle, state: State<'_, AppState>) -> Vec<HealthIssue> {
+    let cfg = state.cfg.lock().expect("cfg lock").clone();
+    let mut issues = collect_health_issues(&cfg);
+    // git 源检查需要真实 repos 路径，在此补齐
+    let repos = repos_dir(&app);
+    for s in &cfg.git_sources {
+        let dir = repos.join(&s.name);
+        if !dir.join(".git").exists() {
+            issues.push(HealthIssue {
+                kind: "git_source_broken".into(),
+                severity: "error".into(),
+                message: format!("git 源「{}」的本地克隆缺失（{}）", s.name, dir.display()),
+                fixable: true,
+            });
+        }
+        let dir_str = dir.to_string_lossy().to_string();
+        if !cfg.roots.iter().any(|r| r.path == dir_str) {
+            issues.push(HealthIssue {
+                kind: "git_root_missing".into(),
+                severity: "warn".into(),
+                message: format!("git 源「{}」未注册为知识根", s.name),
+                fixable: true,
+            });
+        }
+    }
+    issues
+}
+
+/// 一键修复全部可修复项：去重根、移除失效根、清洗规则、补齐 git 根、回正值域
+#[tauri::command]
+fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<String>, Config), String> {
+    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    let mut fixed: Vec<String> = Vec::new();
+
+    // 1. 去重根（保留首条）
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let before = cfg.roots.len();
+    cfg.roots.retain(|r| {
+        seen.insert(r.path.replace('\\', "/").trim_end_matches('/').to_lowercase())
+    });
+    if cfg.roots.len() < before {
+        fixed.push(format!("移除重复知识库根 {} 条", before - cfg.roots.len()));
+    }
+
+    // 2. 移除目录不存在的根
+    let before = cfg.roots.len();
+    cfg.roots.retain(|r| std::path::Path::new(&r.path).is_dir());
+    if cfg.roots.len() < before {
+        fixed.push(format!("移除目录不存在的知识库根 {} 条", before - cfg.roots.len()));
+    }
+
+    // 3. 清洗 glob 规则（去空、归一、去重）
+    let clean = |rules: &Vec<String>| -> (Vec<String>, bool) {
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut changed = false;
+        for raw in rules {
+            let n = normalize_rule(raw);
+            if n.is_empty() {
+                changed = true;
+                continue;
+            }
+            if &n != raw {
+                changed = true;
+            }
+            if seen.insert(n.clone()) {
+                out.push(n);
+            } else {
+                changed = true;
+            }
+        }
+        (out, changed)
+    };
+    let (ex, ch) = clean(&cfg.scope.exclude_globs);
+    if ch { fixed.push("清洗全局排除规则".into()); }
+    cfg.scope.exclude_globs = ex;
+    let (inc, ch) = clean(&cfg.scope.include_globs);
+    if ch { fixed.push("清洗包含白名单规则".into()); }
+    cfg.scope.include_globs = inc;
+    for r in &mut cfg.roots {
+        let (re, ch) = clean(&r.root_exclude_globs);
+        if ch { fixed.push(format!("清洗库「{}」独立排除规则", r.label)); }
+        r.root_exclude_globs = re;
+    }
+
+    // 4. git 源：克隆缺失→移除源（根若存在一并移除）；根缺失→补注册
+    let repos = repos_dir(&app);
+    let before = cfg.git_sources.len();
+    cfg.git_sources.retain(|s| repos.join(&s.name).join(".git").exists());
+    if cfg.git_sources.len() < before {
+        fixed.push(format!("移除克隆缺失的 git 源 {} 条", before - cfg.git_sources.len()));
+    }
+    let before = cfg.roots.len();
+    cfg.roots.retain(|r| {
+        // 孤儿根：指向 repos 目录但没有对应 git 源 → 移除
+        let p = r.path.replace('\\', "/");
+        if let Some(idx) = p.rfind("/repos/") {
+            let name = p[idx + 7..].trim_end_matches('/').to_string();
+            if cfg.git_sources.iter().any(|s| s.name == name) {
+                true
+            } else {
+                fixed.push(format!("移除孤儿克隆根「{}」", r.label));
+                false
+            }
+        } else {
+            true
+        }
+    });
+    let _ = before;
+    for s in &cfg.git_sources {
+        let dir_str = repos.join(&s.name).to_string_lossy().to_string();
+        if !cfg.roots.iter().any(|r| r.path == dir_str) {
+            cfg.roots.push(config::KnowledgeRoot {
+                path: dir_str,
+                label: s.name.clone(),
+                enabled: true,
+                root_exclude_globs: vec![".git/".into()],
+            });
+            fixed.push(format!("补注册 git 源「{}」为知识根", s.name));
+        }
+    }
+
+    // 5. 值域回正
+    if cfg.scope.max_file_kb == 0 {
+        cfg.scope.max_file_kb = 4096;
+        fixed.push("单文件大小上限回正为 4096 KB".into());
+    }
+    if cfg.scope.max_age_days > 36500 {
+        cfg.scope.max_age_days = 0;
+        fixed.push("时间窗异常值回正为不限".into());
+    }
+    let before = cfg.scope.include_exts.clone();
+    cfg.scope.include_exts = cfg
+        .scope
+        .include_exts
+        .iter()
+        .map(|e| e.trim().trim_start_matches('.').to_lowercase())
+        .filter(|e| !e.is_empty())
+        .collect();
+    if cfg.scope.include_exts != before {
+        fixed.push("清洗扩展名列表".into());
+    }
+
+    // 有变更才落盘 + 重新同步
+    if !fixed.is_empty() {
+        // 同步索引到修复后的范围
+        let roots = cfg.root_triples();
+        let scope = cfg.scope.clone();
+        *state.cfg.lock().expect("cfg lock") = cfg.clone();
+        config::save(&app, &cfg);
+        if !roots.is_empty() {
+            let _ = state.engine.sync_roots(&roots, &scope);
+        }
+        start_watchers(&app);
+    }
+    Ok((fixed, cfg))
+}
+
 #[tauri::command]
 fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
     let roots = state.cfg.lock().expect("cfg lock").root_triples();
@@ -1242,6 +1539,8 @@ pub fn run() {
             clear_search_history,
             get_index_stats,
             scope_check,
+            health_check,
+            health_fix_all,
             import_scope_rules,
             export_scope_rules,
             load_config_profile,

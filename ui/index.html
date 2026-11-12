@@ -95,6 +95,20 @@
           <div id="diag-result" class="diag-result" hidden></div>
         </div>
         <div class="set-col">
+          <span class="lbl-line">配置健康检查（重复根 / 目录不存在 / 无效规则 / git 源失配 / 值域异常）</span>
+          <div class="set-row">
+            <button id="btn-health" class="mini-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              检查配置
+            </button>
+            <button id="btn-health-fix" class="mini-btn" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              一键修复
+            </button>
+          </div>
+          <div id="health-result" class="diag-result" hidden></div>
+        </div>
+        <div class="set-col">
           <span class="lbl-line">排除规则（每行一条：目录用 dir/，文件用 *.tmp.md 或相对路径）</span>
           <textarea id="set-excludes" class="set-area mono" rows="2" spellcheck="false" placeholder="草稿/&#10;*.tmp.md"></textarea>
           <span class="lbl-line">包含白名单（可选，语法同上；留空 = 全部收录；非空 = 命中任一条才收录）</span>

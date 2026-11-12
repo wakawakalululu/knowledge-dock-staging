@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "knowledge-dock",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "identifier": "com.local.knowledgedock",
   "build": {
     "frontendDist": "../ui"
