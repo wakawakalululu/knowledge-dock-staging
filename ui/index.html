@@ -145,6 +145,25 @@
           </div>
           <span class="lbl-line dim">间隔分钟 = 定时自动拉取（0 = 仅手动更新）；依赖系统已安装的 git 命令</span>
         </div>
+        <div class="set-col">
+          <span class="lbl-line">WebDAV 远程目录（镜像到本地后参与检索，支持坚果云/Alist 等）</span>
+          <div id="dav-list"></div>
+          <input id="dav-url" class="set-input mono" placeholder="集合 URL：https://dav.jianguoyun.com/dav/notes/" spellcheck="false" />
+          <div class="set-row git-add-row">
+            <input id="dav-user" class="set-input" placeholder="用户名" spellcheck="false" autocomplete="off" />
+            <input id="dav-pass" class="set-input" type="password" placeholder="密码/应用密码" autocomplete="new-password" />
+          </div>
+          <div class="set-row git-add-row">
+            <input id="dav-name" class="set-input" placeholder="显示名（留空取 URL 段）" spellcheck="false" />
+            <input id="dav-interval" class="set-input" type="number" min="0" step="5" value="30" title="自动同步间隔（分钟），0=仅手动" />
+            <button id="btn-dav-test" class="mini-btn">测试</button>
+            <button id="btn-dav-add" class="mini-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m5 12 7 7 7-7" transform="rotate(180 12 12)"/></svg>
+              添加并同步
+            </button>
+          </div>
+          <span class="lbl-line dim">凭据仅存本机配置；间隔 0 = 仅手动；依赖系统 curl（Windows 10+ 自带）</span>
+        </div>
       </div>
 
       <div class="tab-pane" id="tab-general" hidden>

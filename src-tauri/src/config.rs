@@ -55,6 +55,28 @@ fn default_git_enabled() -> bool {
     true
 }
 
+/// WebDAV 远程目录源：镜像到本地目录后注册为知识根（与 git 源同模式）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebdavSource {
+    /// 显示名（同时是镜像目录名与 @前缀标签）
+    pub name: String,
+    /// 集合 URL（如 https://dav.jianguoyun.com/dav/notes/）
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default = "default_git_enabled")]
+    pub enabled: bool,
+    /// 自动同步间隔（分钟），0 = 仅手动
+    #[serde(default)]
+    pub interval_min: u64,
+    #[serde(default)]
+    pub last_sync: u64,
+    #[serde(default)]
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// v0.3 兼容字段：等价于 knowledge_dirs 单元素；仅作迁移来源保留
@@ -92,6 +114,9 @@ pub struct Config {
     /// Git 仓库同步源
     #[serde(default)]
     pub git_sources: Vec<GitRepoSource>,
+    /// WebDAV 远程目录源
+    #[serde(default)]
+    pub webdav_sources: Vec<WebdavSource>,
     /// 各范围使用次数（用于排序和统计）
     #[serde(default)]
     pub scope_usage: HashMap<String, u64>,
@@ -219,6 +244,7 @@ impl Default for Config {
             search_history: Vec::new(),
             presets: Vec::new(),
             git_sources: Vec::new(),
+            webdav_sources: Vec::new(),
             scope_usage: HashMap::new(),
         }
     }

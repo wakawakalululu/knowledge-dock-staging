@@ -555,10 +555,38 @@ function renderGitList() {
     .join("");
 }
 
+/* ---------- WebDAV 远程目录源 ---------- */
+function renderDavList() {
+  const $list = document.getElementById("dav-list");
+  if (!$list) return;
+  const sources = (cfg && cfg.webdav_sources) || [];
+  if (!sources.length) {
+    $list.innerHTML = '<div class="empty-sm">尚未添加 WebDAV 源，粘贴集合 URL</div>';
+    return;
+  }
+  $list.innerHTML = sources
+    .map((s) => {
+      const syncCell = s.last_error
+        ? `<b class="git-err" title="${escapeHtml(s.last_error)}">失败</b>`
+        : escapeHtml(relTime(s.last_sync));
+      return `
+    <div class="git-row" data-name="${escapeHtml(s.name)}">
+      <span class="git-name" title="${escapeHtml(s.url)}">${escapeHtml(s.name)}</span>
+      <span class="git-branch">WebDAV</span>
+      <input class="set-input git-int" data-k="interval" type="number" min="0" step="5" value="${s.interval_min || 0}" title="间隔分钟，0=仅手动" />
+      <span class="git-sync">${syncCell}</span>
+      <button class="root-del" data-act="pull">同步</button>
+      <button class="root-del" data-act="del">移除</button>
+    </div>`;
+    })
+    .join("");
+}
+
 function openSettings() {
   settingsOpen = true;
   renderPresetSelect();
   renderGitList();
+  renderDavList();
   settingsTab = "scope";
   activateTab("scope");
   if (cfg) {
@@ -890,6 +918,93 @@ document.getElementById("btn-git-add").addEventListener("click", async () => {
     $stats.textContent = "克隆完成，已加入检索";
   } catch (err) {
     $stats.textContent = "克隆失败: " + err;
+  }
+});
+
+/* WebDAV 源：列表操作与行内间隔编辑 */
+const $davList = document.getElementById("dav-list");
+if ($davList) {
+  $davList.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const row = btn.closest(".git-row");
+    const name = row && row.dataset.name;
+    if (!name) return;
+    if (btn.dataset.act === "pull") {
+      $stats.textContent = `同步 ${name} 中…`;
+      try {
+        cfg = await invoke("webdav_pull", { name });
+        renderDavList();
+        renderRootChips();
+        $stats.textContent = "同步完成，检索内容已刷新";
+      } catch (err) {
+        $stats.textContent = "同步失败: " + err;
+        renderDavList();
+      }
+    } else if (btn.dataset.act === "del") {
+      $stats.textContent = `移除 ${name} 中…`;
+      try {
+        cfg = await invoke("webdav_remove", { name });
+        renderDavList();
+        renderRootsEditor();
+        renderRootChips();
+        $stats.textContent = "已移除源及本地镜像";
+      } catch (err) {
+        $stats.textContent = "移除失败: " + err;
+      }
+    }
+  });
+  $davList.addEventListener("change", (e) => {
+    if (e.target.dataset.k !== "interval" || !cfg) return;
+    const row = e.target.closest(".git-row");
+    const src = cfg.webdav_sources.find((s) => s.name === row.dataset.name);
+    if (src) src.interval_min = Math.max(0, Number(e.target.value) || 0);
+  });
+}
+
+/* WebDAV 源：测试连接 / 添加并同步 */
+document.getElementById("btn-dav-test").addEventListener("click", async () => {
+  const url = document.getElementById("dav-url").value.trim();
+  if (!url) {
+    $stats.textContent = "请填写 WebDAV URL";
+    return;
+  }
+  $stats.textContent = "测试连接中…";
+  try {
+    await invoke("webdav_test", {
+      url,
+      username: document.getElementById("dav-user").value.trim(),
+      password: document.getElementById("dav-pass").value,
+    });
+    $stats.textContent = "连接成功";
+  } catch (err) {
+    $stats.textContent = "连接失败: " + err;
+  }
+});
+
+document.getElementById("btn-dav-add").addEventListener("click", async () => {
+  const url = document.getElementById("dav-url").value.trim();
+  if (!url) {
+    $stats.textContent = "请填写 WebDAV URL";
+    return;
+  }
+  const name = document.getElementById("dav-name").value.trim();
+  const username = document.getElementById("dav-user").value.trim();
+  const password = document.getElementById("dav-pass").value;
+  const intervalMin = Math.max(0, Number(document.getElementById("dav-interval").value) || 0);
+  $stats.textContent = "连接并镜像同步中…";
+  try {
+    cfg = await invoke("webdav_add", { url, username, password, name, intervalMin });
+    document.getElementById("dav-url").value = "";
+    document.getElementById("dav-user").value = "";
+    document.getElementById("dav-pass").value = "";
+    document.getElementById("dav-name").value = "";
+    renderDavList();
+    renderRootsEditor();
+    renderRootChips();
+    $stats.textContent = "WebDAV 源已加入检索";
+  } catch (err) {
+    $stats.textContent = "添加失败: " + err;
   }
 });
 
