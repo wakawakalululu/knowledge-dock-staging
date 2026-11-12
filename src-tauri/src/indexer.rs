@@ -6,6 +6,7 @@
 //! - 兜底：纯文本按空行分段
 //!
 //! 检索与打分在 engine.rs（Tantivy BM25 + jieba 分词）。
+use crate::matching::{is_excluded_rel, is_included_rel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -120,6 +121,10 @@ pub struct PlanOptions {
     pub max_file_bytes: u64,
     /// 排除规则（相对路径）：`dir/` 目录前缀、`*.tmp.md` 通配、精确路径/文件名
     pub exclude_globs: Vec<String>,
+    /// 包含白名单（同语法）：空 = 全收；非空 = 仅收录命中者
+    pub include_globs: Vec<String>,
+    /// 时间窗（天）：0 = 不限；>0 = 只收录最近 N 天内有修改的文件
+    pub max_age_days: u64,
 }
 pub fn mtime_ms(p: &Path) -> u64 {
     p.metadata()
@@ -129,29 +134,16 @@ pub fn mtime_ms(p: &Path) -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
-/// 排除规则匹配：`dir/` 前缀 / `*` 通配 / 精确相对路径或文件名
-fn is_excluded(rel: &str, rules: &[String]) -> bool {
-    let rel = rel.replace('\\', "/");
-    for raw in rules {
-        let r = raw.trim().replace('\\', "/");
-        if r.is_empty() {
-            continue;
-        }
-        if r.ends_with('/') {
-            if rel.starts_with(&r) {
-                return true;
-            }
-        } else if r.contains('*') {
-            // 极简通配：仅支持 `*`（转义其余字符后锚定整串）
-            let re = format!("^{}$", regex::escape(&r).replace("\\*", ".*"));
-            if regex::Regex::new(&re).map(|re| re.is_match(&rel)).unwrap_or(false) {
-                return true;
-            }
-        } else if rel == r || rel.ends_with(&format!("/{r}")) {
-            return true;
-        }
-    }
-    false
+/// 当前 unix 毫秒（时间窗过滤用）
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+/// 相对路径中任一段是否为忽略目录（扫描层同款规则，诊断器 scope_check 复用）
+pub fn is_ignored_rel(rel: &str) -> bool {
+    rel.split('/').any(is_ignored_dir)
 }
 /// 扫描目录，按范围规则产出合格文件的清单（不读取文件内容）
 pub fn scan_index_plan(root: &Path, opts: &PlanOptions) -> Result<Vec<FilePlan>, String> {
@@ -190,10 +182,20 @@ pub fn scan_index_plan(root: &Path, opts: &PlanOptions) -> Result<Vec<FilePlan>,
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
-        if is_excluded(&rel, &opts.exclude_globs) {
+        if is_excluded_rel(&rel, &opts.exclude_globs) {
+            continue;
+        }
+        if !is_included_rel(&rel, &opts.include_globs) {
             continue;
         }
         let mtime = mtime_ms(entry.path());
+        // 时间窗：只收录最近 N 天内有修改的文件
+        if opts.max_age_days > 0 {
+            let cutoff = now_millis().saturating_sub(opts.max_age_days.saturating_mul(86_400_000));
+            if mtime < cutoff {
+                continue;
+            }
+        }
         plans.push(FilePlan { rel, abs, mtime });
     }
     Ok(plans)

@@ -363,12 +363,12 @@ impl Engine {
     /// 增量同步（多知识库根聚合）：只 stat 全部文件做 mtime 差异，
     /// **仅重读重切变更文件**（大库免全量重扫）；多根时展示路径带库名前缀
     /// roots: (路径, 显示名)；scope: 范围规则
-    pub fn sync_roots(&self, roots: &[(PathBuf, String)], scope: &ScopeConfig) -> Result<Stats, String> {
+    pub fn sync_roots(&self, roots: &[(PathBuf, String, Vec<String>)], scope: &ScopeConfig) -> Result<Stats, String> {
         if roots.is_empty() {
             return Ok(Stats { docs: 0, chunks: 0 });
         }
         let multi = roots.len() > 1;
-        let opts = indexer::PlanOptions {
+        let base_opts = indexer::PlanOptions {
             include_exts: scope.include_exts.clone(),
             max_file_bytes: if scope.max_file_kb == 0 {
                 4 * 1024 * 1024
@@ -376,9 +376,14 @@ impl Engine {
                 scope.max_file_kb * 1024
             },
             exclude_globs: scope.exclude_globs.clone(),
+            include_globs: scope.include_globs.clone(),
+            max_age_days: scope.max_age_days,
         };
         let mut plan: Vec<(indexer::FilePlan, String)> = Vec::new();
-        for (root, label) in roots {
+        for (root, label, root_excludes) in roots {
+            // 每库独立排除规则与全局规则合并后生效
+            let mut opts = base_opts.clone();
+            opts.exclude_globs.extend(root_excludes.iter().cloned());
             let ps = indexer::scan_index_plan(root, &opts)?;
             for p in ps {
                 let rel = if multi {

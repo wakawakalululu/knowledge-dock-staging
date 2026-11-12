@@ -5,6 +5,7 @@
 //! 检索：Tantivy BM25 + jieba 分词 + 持久化索引 + 同义词改写（纯离线）。
 
 pub mod config;
+pub mod matching;
 pub mod scope;
 pub mod engine;
 pub mod gitsync;
@@ -72,7 +73,7 @@ struct ContextResult {
 /// 后台执行一次多根同步并推送统计
 fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let roots = state.cfg.lock().expect("cfg lock").root_triples();
     let scope = state.cfg.lock().expect("cfg lock").scope.clone();
     if roots.is_empty() {
         return;
@@ -91,7 +92,7 @@ fn sync_and_emit(app: &AppHandle) {
 /// 旧 watcher 被替换后通道关闭，旧监听线程自动退出（防线程累积）
 fn start_watchers(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let roots = state.cfg.lock().expect("cfg lock").root_triples();
     if roots.is_empty() {
         return;
     }
@@ -100,7 +101,7 @@ fn start_watchers(app: &AppHandle) {
         Ok(w) => w,
         Err(_) => return,
     };
-    for (r, _label) in &roots {
+    for (r, _, _) in &roots {
         if watcher.watch(r, RecursiveMode::Recursive).is_err() {
             return;
         }
@@ -304,7 +305,7 @@ fn apply_scope_template(name: String, app: AppHandle, state: State<'_, AppState>
     if let Some(ex) = tpl["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     if let Some(exts) = tpl["include_exts"].as_array() { cfg.scope.include_exts = exts.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     config::save(&app, &cfg);
-    let roots = cfg.root_pairs();
+    let roots = cfg.root_triples();
     let scope = cfg.scope.clone();
     let _ = state.engine.sync_roots(&roots, &scope);
     Ok(cfg)
@@ -337,7 +338,7 @@ fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>)
     apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
-    let roots = cfg.root_pairs();
+    let roots = cfg.root_triples();
     if !roots.is_empty() { let scope = cfg.scope.clone(); let _ = state.engine.sync_roots(&roots, &scope); start_watchers(&app); }
     Ok(cfg)
 }
@@ -346,7 +347,13 @@ fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>)
 #[tauri::command]
 fn export_scope_rules(state: State<'_, AppState>) -> Result<String, String> {
     let cfg = state.cfg.lock().expect("cfg lock");
-    let data = serde_json::json!({"exclude_globs": cfg.scope.exclude_globs, "include_exts": cfg.scope.include_exts, "max_file_kb": cfg.scope.max_file_kb});
+    let data = serde_json::json!({
+        "exclude_globs": cfg.scope.exclude_globs,
+        "include_globs": cfg.scope.include_globs,
+        "include_exts": cfg.scope.include_exts,
+        "max_file_kb": cfg.scope.max_file_kb,
+        "max_age_days": cfg.scope.max_age_days
+    });
     Ok(serde_json::to_string_pretty(&data).unwrap_or_default())
 }
 
@@ -356,10 +363,12 @@ fn import_scope_rules(app: AppHandle, json: String, state: State<'_, AppState>) 
     let data: serde_json::Value = serde_json::from_str(&json).map_err(|e| format!("JSON 格式错误: {e}"))?;
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
     if let Some(ex) = data["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
+    if let Some(inc) = data["include_globs"].as_array() { cfg.scope.include_globs = inc.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     if let Some(exts) = data["include_exts"].as_array() { cfg.scope.include_exts = exts.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     if let Some(kb) = data["max_file_kb"].as_u64() { cfg.scope.max_file_kb = kb; }
+    if let Some(days) = data["max_age_days"].as_u64() { cfg.scope.max_age_days = days; }
     config::save(&app, &cfg);
-    let roots = cfg.root_pairs();
+    let roots = cfg.root_triples();
     let scope = cfg.scope.clone();
     let _ = state.engine.sync_roots(&roots, &scope);
     Ok(cfg)
@@ -371,9 +380,183 @@ fn get_index_stats(state: State<'_, AppState>) -> StatsDetail {
     state.engine.stats_detail()
 }
 
+/// 范围诊断：判定某文件当前配置下是否会被索引，逐条给出判定链
+#[derive(Serialize)]
+struct ScopeCheckResult {
+    exists: bool,
+    /// 归属的知识库根（显示名）；不在任何启用根内则 None
+    root: Option<String>,
+    /// 相对根的路径
+    rel: Option<String>,
+    will_index: bool,
+    /// 判定链（按扫描器实际顺序）
+    reasons: Vec<String>,
+}
+
+#[tauri::command]
+fn scope_check(path: String, state: State<'_, AppState>) -> ScopeCheckResult {
+    use crate::matching::{glob_rule_matches, is_included_rel};
+    let cfg = state.cfg.lock().expect("cfg lock").clone();
+    let scope = &cfg.scope;
+    let mut reasons: Vec<String> = Vec::new();
+    let fail = |root: Option<String>, rel: Option<String>, mut reasons: Vec<String>| ScopeCheckResult {
+        exists: true,
+        root,
+        rel,
+        will_index: false,
+        reasons: {
+            reasons.push("结论: 不会被索引".into());
+            reasons
+        },
+    };
+
+    let p = std::path::PathBuf::from(path.trim());
+    if !p.is_file() {
+        return ScopeCheckResult {
+            exists: false,
+            root: None,
+            rel: None,
+            will_index: false,
+            reasons: vec!["路径不存在或不是文件".into()],
+        };
+    }
+    let pstr = p.to_string_lossy().to_string();
+    let pl = pstr.to_lowercase();
+
+    // 归属根：取前缀最长（最具体）的启用根
+    let mut best: Option<(usize, config::KnowledgeRoot, String)> = None;
+    for r in cfg.effective_roots() {
+        let rp = r.path.trim_end_matches(['/', '\\']).to_string();
+        if rp.len() <= 1 || !pl.starts_with(&rp.to_lowercase()) {
+            continue;
+        }
+        let rel = pstr[rp.len()..]
+            .trim_start_matches(['/', '\\'])
+            .replace('\\', "/");
+        if best.as_ref().map_or(true, |(len, _, _)| rp.len() > *len) {
+            best = Some((rp.len(), r, rel));
+        }
+    }
+    let Some((_len, root, rel)) = best else {
+        return ScopeCheckResult {
+            exists: true,
+            root: None,
+            rel: None,
+            will_index: false,
+            reasons: vec!["不在任何启用的知识库根内", "结论: 不会被索引"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        };
+    };
+    let label = if root.label.trim().is_empty() {
+        scope::basename_of(&root.path)
+    } else {
+        root.label.clone()
+    };
+    reasons.push(format!("归属库: {label}（相对路径 {rel}）"));
+
+    // 忽略目录（扫描层同款规则：. 开头或内置忽略名单）
+    if indexer::is_ignored_rel(&rel) {
+        reasons.push("忽略目录 ✗ 路径含 . 开头或内置忽略目录（node_modules/target 等）".into());
+        return fail(Some(label), Some(rel), reasons);
+    }
+    reasons.push("忽略目录 ✓".into());
+
+    // 扩展名
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase());
+    let exts = if scope.include_exts.is_empty() {
+        vec!["md".into(), "markdown".into(), "txt".into()]
+    } else {
+        scope.include_exts.clone()
+    };
+    let ext_ok = matches!(ext.as_deref(), Some(x) if exts.iter().any(|e| e == x));
+    if ext_ok {
+        reasons.push(format!("扩展名 ✓ ({:?})", ext.unwrap_or_default()));
+    } else {
+        reasons.push(format!("扩展名 ✗ {:?} 不在 [{}]", ext, exts.join(", ")));
+        return fail(Some(label), Some(rel), reasons);
+    }
+
+    // 大小上限
+    let max_bytes = if scope.max_file_kb == 0 {
+        4 * 1024 * 1024
+    } else {
+        scope.max_file_kb * 1024
+    };
+    let (size_ok, size_kb) = std::fs::metadata(&p)
+        .map(|m| (m.len() <= max_bytes, m.len() / 1024))
+        .unwrap_or((false, 0));
+    if size_ok {
+        reasons.push(format!("大小 ✓ ({size_kb} KB ≤ {} KB)", scope.max_file_kb));
+    } else {
+        reasons.push(format!("大小 ✗ {size_kb} KB 超过上限 {} KB", scope.max_file_kb));
+        return fail(Some(label), Some(rel), reasons);
+    }
+
+    // 白名单（空 = 全收）
+    if scope.include_globs.is_empty() {
+        reasons.push("包含白名单 ✓ 未启用（全收）".into());
+    } else if is_included_rel(&rel, &scope.include_globs) {
+        let hit = scope
+            .include_globs
+            .iter()
+            .find(|r| glob_rule_matches(&rel, r))
+            .cloned()
+            .unwrap_or_default();
+        reasons.push(format!("包含白名单 ✓ 命中: {hit}"));
+    } else {
+        reasons.push(format!(
+            "包含白名单 ✗ 未命中任何规则 [{}]",
+            scope.include_globs.join(", ")
+        ));
+        return fail(Some(label), Some(rel), reasons);
+    }
+
+    // 排除规则（全局 + 每库独立）
+    let all_ex: Vec<String> = scope
+        .exclude_globs
+        .iter()
+        .chain(root.root_exclude_globs.iter())
+        .cloned()
+        .collect();
+    if let Some(hit) = all_ex.iter().find(|r| glob_rule_matches(&rel, r)) {
+        reasons.push(format!("排除规则 ✗ 命中: {hit}"));
+        return fail(Some(label), Some(rel), reasons);
+    }
+    reasons.push("排除规则 ✓ 未命中".into());
+
+    // 时间窗
+    if scope.max_age_days == 0 {
+        reasons.push("时间窗 ✓ 未启用".into());
+    } else {
+        let mtime = indexer::mtime_ms(&p);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let cutoff = now_ms.saturating_sub(scope.max_age_days.saturating_mul(86_400_000));
+        if mtime >= cutoff {
+            reasons.push(format!("时间窗 ✓ 最近 {} 天内有修改", scope.max_age_days));
+        } else {
+            reasons.push(format!("时间窗 ✗ 超过 {} 天未修改", scope.max_age_days));
+            return fail(Some(label), Some(rel), reasons);
+        }
+    }
+
+    reasons.push("结论: 会被索引".into());
+    ScopeCheckResult {
+        exists: true,
+        root: Some(label),
+        rel: Some(rel),
+        will_index: true,
+        reasons,
+    }
+}
+
 #[tauri::command]
 fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
-    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let roots = state.cfg.lock().expect("cfg lock").root_triples();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
     }
@@ -422,7 +605,7 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
         config::save(&app, &cfg);
     }
 
-    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let roots = state.cfg.lock().expect("cfg lock").root_triples();
     let scope = state.cfg.lock().expect("cfg lock").scope.clone();
     let stats = state.engine.sync_roots(&roots, &scope).ok();
     start_watchers(&app);
@@ -497,9 +680,11 @@ fn save_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -
     if name.is_empty() { return Err("预设名不能为空".into()); }
     let roots = cfg.roots.clone();
     let excludes = cfg.scope.exclude_globs.clone();
+    let includes = cfg.scope.include_globs.clone();
     let exts = cfg.scope.include_exts.clone();
+    let max_age = cfg.scope.max_age_days;
     cfg.presets.retain(|p| p.name != name);
-    cfg.presets.push(config::ScopePreset { name, roots, exclude_globs: excludes, include_exts: exts });
+    cfg.presets.push(config::ScopePreset { name, roots, exclude_globs: excludes, include_exts: exts, include_globs: includes, max_age_days: max_age });
     let cfg_clone = cfg.clone();
     drop(cfg);
     config::save(&app, &cfg_clone);
@@ -514,12 +699,14 @@ fn load_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -
         .ok_or_else(|| format!("预设不存在: {name}"))?;
     cfg.roots = preset.roots.clone();
     cfg.scope.exclude_globs = preset.exclude_globs.clone();
+    cfg.scope.include_globs = preset.include_globs.clone();
     cfg.scope.include_exts = preset.include_exts.clone();
+    cfg.scope.max_age_days = preset.max_age_days;
     // 记录使用次数
     *cfg.scope_usage.entry(name).or_insert(0) += 1;
     config::save(&app, &cfg);
     start_watchers(&app);
-    let roots = cfg.root_pairs();
+    let roots = cfg.root_triples();
     let scope = cfg.scope.clone();
     let _ = state.engine.sync_roots(&roots, &scope);
     Ok(cfg)
@@ -579,7 +766,7 @@ fn import_config(app: AppHandle, state: State<'_, AppState>) -> Result<Config, S
     apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
-    let roots = cfg.root_pairs();
+    let roots = cfg.root_triples();
     if !roots.is_empty() {
         let scope = cfg.scope.clone();
         let _ = state.engine.sync_roots(&roots, &scope);
@@ -598,14 +785,14 @@ fn expand_context(
     after: usize,
     state: State<'_, AppState>,
 ) -> Result<ContextResult, String> {
-    let roots = state.cfg.lock().expect("cfg lock").root_pairs();
+    let roots = state.cfg.lock().expect("cfg lock").root_triples();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
     }
     let canon_path = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
     let allowed = roots
         .iter()
-        .filter_map(|(r, _)| std::fs::canonicalize(r).ok())
+        .filter_map(|(r, _, _)| std::fs::canonicalize(r).ok())
         .any(|root| canon_path.starts_with(&root));
     if !allowed {
         return Err("路径不在知识库目录内".into());
@@ -704,7 +891,7 @@ fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
             s.last_sync = gitsync::now_secs();
             s.last_error = None;
         }
-        let roots = cfg.root_pairs();
+        let roots = cfg.root_triples();
         let scope = cfg.scope.clone();
         config::save(app, &cfg);
         if roots.is_empty() {
@@ -823,7 +1010,7 @@ fn git_clone_blocking(
                 root_exclude_globs: vec![".git/".into()],
             });
         }
-        let roots = cfg.root_pairs();
+        let roots = cfg.root_triples();
         let scope = cfg.scope.clone();
         config::save(app, &cfg);
         if roots.is_empty() {
@@ -881,7 +1068,7 @@ fn git_remove_blocking(app: &AppHandle, name: String) -> Result<Config, String> 
         let dir = repos_dir(app).join(&name);
         cfg.roots
             .retain(|r| r.path != dir.to_string_lossy().to_string());
-        let roots = cfg.root_pairs();
+        let roots = cfg.root_triples();
         let scope = cfg.scope.clone();
         config::save(app, &cfg);
         if !roots.is_empty() {
@@ -1047,6 +1234,7 @@ pub fn run() {
             get_search_history,
             clear_search_history,
             get_index_stats,
+            scope_check,
             import_scope_rules,
             export_scope_rules,
             load_config_profile,

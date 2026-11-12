@@ -28,6 +28,8 @@ const $settings = document.getElementById("settings");
 const $settingsTabs = document.getElementById("settings-tabs");
 const $rootsList = document.getElementById("roots-list");
 const $setExcludes = document.getElementById("set-excludes");
+const $setIncludes = document.getElementById("set-includes");
+const $setMaxage = document.getElementById("set-maxage");
 const $setExts = document.getElementById("set-exts");
 const $setMaxkb = document.getElementById("set-maxkb");
 const $setShortcut = document.getElementById("set-shortcut");
@@ -217,6 +219,8 @@ async function applyPreset(name) {
     renderRootsEditor();
     renderRootChips();
     $setExcludes.value = (cfg.scope.exclude_globs || []).join("\n");
+    $setIncludes.value = (cfg.scope.include_globs || []).join("\n");
+    $setMaxage.value = cfg.scope.max_age_days || 0;
     $setExts.value = (cfg.scope.include_exts || ["md","markdown","txt"]).join(", ");
     $setMaxkb.value = cfg.scope.max_file_kb || 4096;
     const s = await invoke("rescan");
@@ -484,6 +488,8 @@ function openSettings() {
   activateTab("scope");
   if (cfg) {
     $setExcludes.value = (cfg.scope && cfg.scope.exclude_globs ? cfg.scope.exclude_globs : []).join("\n");
+    $setIncludes.value = (cfg.scope && cfg.scope.include_globs ? cfg.scope.include_globs : []).join("\n");
+    $setMaxage.value = (cfg.scope && cfg.scope.max_age_days) || 0;
     $setExts.value = (cfg.scope && cfg.scope.include_exts ? cfg.scope.include_exts : ["md", "markdown", "txt"]).join(", ");
     $setMaxkb.value = (cfg.scope && cfg.scope.max_file_kb) || 4096;
     $setShortcut.value = cfg.shortcut;
@@ -599,6 +605,37 @@ $chipsRoot.addEventListener("click", (e) => {
   doSearch();
 });
 
+
+/* 范围诊断器：检查某文件在当前配置下是否会被索引 */
+const $diagPath = document.getElementById("diag-path");
+const $diagResult = document.getElementById("diag-result");
+async function runDiag() {
+  const p = $diagPath.value.trim();
+  if (!p) return;
+  $diagResult.hidden = false;
+  $diagResult.innerHTML = '<div class="diag-line">诊断中…</div>';
+  try {
+    const r = await invoke("scope_check", { path: p });
+    const head = r.exists
+      ? (r.root ? `<div class="diag-line"><b>${escapeHtml(r.root)}</b> / ${escapeHtml(r.rel || "")}</div>` : "")
+      : '<div class="diag-line err">路径不存在或不是文件</div>';
+    const lines = (r.reasons || [])
+      .map((line) => {
+        const cls = line.includes("✗") || line.includes("不会被索引") ? "err" : (line.includes("结论") ? "final" : "ok");
+        return `<div class="diag-line ${cls}">${escapeHtml(line)}</div>`;
+      })
+      .join("");
+    $diagResult.innerHTML = head + lines;
+  } catch (e) {
+    $diagResult.innerHTML = `<div class="diag-line err">诊断失败: ${escapeHtml(String(e))}</div>`;
+  }
+}
+if ($diagPath && $diagResult) {
+  document.getElementById("btn-diag").addEventListener("click", runDiag);
+  $diagPath.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") runDiag();
+  });
+}
 
 /* 范围预设事件 */
 document.getElementById("preset-select").addEventListener("change", (e) => {
@@ -741,8 +778,10 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     // 2. 范围：根列表（编辑器已实时改 cfg.roots）+ 排除/扩展名/上限
     cfg.scope = {
       exclude_globs: $setExcludes.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+      include_globs: $setIncludes.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
       include_exts: $setExts.value.split(/[,\s]+/).map((s) => s.trim().toLowerCase().replace(/^\./, "")).filter(Boolean),
       max_file_kb: Number($setMaxkb.value) || 4096,
+      max_age_days: Math.max(0, Number($setMaxage.value) || 0),
     };
     const dirs = cfg.roots.map((r) => r.path);
     const next = {
@@ -831,6 +870,8 @@ listen("ui-reset", () => {
   try {
     cfg = await invoke("get_config");
     $setExcludes.value = (cfg.scope && cfg.scope.exclude_globs ? cfg.scope.exclude_globs : []).join("\n");
+    $setIncludes.value = (cfg.scope && cfg.scope.include_globs ? cfg.scope.include_globs : []).join("\n");
+    $setMaxage.value = (cfg.scope && cfg.scope.max_age_days) || 0;
     $setExts.value = (cfg.scope && cfg.scope.include_exts ? cfg.scope.include_exts : ["md", "markdown", "txt"]).join(", ");
     $setMaxkb.value = (cfg.scope && cfg.scope.max_file_kb) || 4096;
     $setShortcut.value = cfg.shortcut;

@@ -20,6 +20,12 @@ pub struct ScopePreset {
     pub roots: Vec<KnowledgeRoot>,
     pub exclude_globs: Vec<String>,
     pub include_exts: Vec<String>,
+    /// v0.8.1：白名单规则（旧预设缺省为空 = 全收）
+    #[serde(default)]
+    pub include_globs: Vec<String>,
+    /// v0.8.1：时间窗天数（旧预设缺省 0 = 不限）
+    #[serde(default)]
+    pub max_age_days: u64,
 }
 
 /// Git 仓库同步源：最小克隆到本地目录后注册为知识根，参与统一检索；

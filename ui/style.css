@@ -634,3 +634,18 @@ html, body {
 .git-add-row #git-branch { flex: none; width: 110px; }
 .git-add-row #git-interval { flex: none; width: 70px; }
 .lbl-line.dim { opacity: 0.65; font-size: 11px; }
+
+/* 范围诊断器结果 */
+.diag-result {
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.diag-line.ok { color: var(--text-dim); }
+.diag-line.err { color: var(--danger); }
+.diag-line.final { font-weight: 600; color: var(--text); border-top: 1px dashed rgba(127,127,127,.25); margin-top: 3px; padding-top: 3px; }
+#diag-path { flex: 1; min-width: 0; }

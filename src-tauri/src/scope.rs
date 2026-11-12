@@ -30,12 +30,19 @@ pub struct ScopeConfig {
     /// - `a/b.md` → 精确相对路径
     #[serde(default = "default_excludes")]
     pub exclude_globs: Vec<String>,
+    /// 包含白名单（相对知识库根的路径，语法同排除规则）：
+    /// 空 = 全收；非空 = 仅收录命中的文件/目录（先白名单后排除）
+    #[serde(default)]
+    pub include_globs: Vec<String>,
     /// 收录的扩展名（小写、不含点）
     #[serde(default = "default_exts")]
     pub include_exts: Vec<String>,
     /// 单文件大小上限（KB）
     #[serde(default = "default_max_kb")]
     pub max_file_kb: u64,
+    /// 时间窗：只索引最近 N 天内有修改的文件（0 = 不限）
+    #[serde(default)]
+    pub max_age_days: u64,
 }
 
 fn default_excludes() -> Vec<String> {
@@ -52,8 +59,10 @@ impl Default for ScopeConfig {
     fn default() -> Self {
         ScopeConfig {
             exclude_globs: default_excludes(),
+            include_globs: Vec::new(),
             include_exts: default_exts(),
             max_file_kb: default_max_kb(),
+            max_age_days: 0,
         }
     }
 }
