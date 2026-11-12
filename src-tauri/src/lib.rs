@@ -421,18 +421,22 @@ fn scope_check(path: String, state: State<'_, AppState>) -> ScopeCheckResult {
         };
     }
     let pstr = p.to_string_lossy().to_string();
-    let pl = pstr.to_lowercase();
+    // 归一化正反斜杠后比较（用户输入 C:/ 而根配置多为 C:\）
+    let pnorm = pstr.replace('\\', "/");
+    let pl = pnorm.to_lowercase();
 
     // 归属根：取前缀最长（最具体）的启用根
     let mut best: Option<(usize, config::KnowledgeRoot, String)> = None;
     for r in cfg.effective_roots() {
-        let rp = r.path.trim_end_matches(['/', '\\']).to_string();
-        if rp.len() <= 1 || !pl.starts_with(&rp.to_lowercase()) {
+        let rp = r
+            .path
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_string();
+        if rp.len() <= 2 || !pl.starts_with(&rp.to_lowercase()) {
             continue;
         }
-        let rel = pstr[rp.len()..]
-            .trim_start_matches(['/', '\\'])
-            .replace('\\', "/");
+        let rel = pnorm[rp.len()..].trim_start_matches('/').to_string();
         if best.as_ref().map_or(true, |(len, _, _)| rp.len() > *len) {
             best = Some((rp.len(), r, rel));
         }
