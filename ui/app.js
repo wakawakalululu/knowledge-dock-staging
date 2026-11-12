@@ -21,6 +21,7 @@ const $btnClear = document.getElementById("btn-clear");
 const $results = document.getElementById("results");
 const $chipsType = document.getElementById("chips-type");
 const $chipsRoot = document.getElementById("chips-root");
+const $chipsPreset = document.getElementById("chips-preset");
 const $resList = document.getElementById("res-list");
 const $stats = document.getElementById("stats");
 const $resCount = document.getElementById("res-count");
@@ -56,6 +57,7 @@ let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下
 let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
+let activePreset = null;  // 当前生效的范围预设（快捷 chips 高亮；手动保存设置后清除）
 
 const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
 const TYPE_ALIAS = {
@@ -208,16 +210,34 @@ function renderPresetSelect() {
   const $sel = document.getElementById("preset-select");
   const presets = (cfg && cfg.presets) || [];
   $sel.innerHTML = '<option value="">选择预设…</option>' +
-    presets.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+    presets.map((p) => `<option value="${escapeHtml(p.name)}"${activePreset === p.name ? " selected" : ""}>${escapeHtml(p.name)}</option>`).join("");
+}
+
+/** 结果面板顶部的预设快捷 chips：有预设才显示，点击直接切换范围（免进设置） */
+function renderPresetChips() {
+  if (!$chipsPreset) return;
+  const presets = (cfg && cfg.presets) || [];
+  if (!presets.length) {
+    $chipsPreset.hidden = true;
+    $chipsPreset.innerHTML = "";
+    return;
+  }
+  const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>';
+  $chipsPreset.hidden = false;
+  $chipsPreset.innerHTML = presets
+    .map((p) => `<button class="chip preset-chip${activePreset === p.name ? " active" : ""}" data-preset="${escapeHtml(p.name)}" title="切换范围预设：${escapeHtml(p.name)}">${icon}${escapeHtml(p.name)}</button>`)
+    .join("");
 }
 
 async function applyPreset(name) {
   if (!name) return;
   try {
     cfg = await invoke("load_scope_preset", { name });
+    activePreset = name;
     applyPin();
     renderRootsEditor();
     renderRootChips();
+    renderPresetChips();
     $setExcludes.value = (cfg.scope.exclude_globs || []).join("\n");
     $setIncludes.value = (cfg.scope.include_globs || []).join("\n");
     $setMaxage.value = cfg.scope.max_age_days || 0;
@@ -605,6 +625,15 @@ $chipsRoot.addEventListener("click", (e) => {
   doSearch();
 });
 
+/* 预设快捷 chips（点击直接切换范围预设） */
+if ($chipsPreset) {
+  $chipsPreset.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chip[data-preset]");
+    if (!btn) return;
+    applyPreset(btn.dataset.preset);
+  });
+}
+
 
 /* 范围诊断器：检查某文件在当前配置下是否会被索引 */
 const $diagPath = document.getElementById("diag-path");
@@ -657,7 +686,9 @@ $presetName.addEventListener("keydown", async (e) => {
   togglePresetName(false);
   try {
     await invoke("save_scope_preset", { name });
+    activePreset = name;
     renderPresetSelect();
+    renderPresetChips();
     document.getElementById("preset-select").value = name;
   } catch (err) {
     $stats.textContent = "保存预设失败: " + err;
@@ -670,7 +701,9 @@ document.getElementById("btn-del-preset").addEventListener("click", async () => 
   const name = sel.value;
   if (!name) return;
   await invoke("delete_scope_preset", { name });
+  if (activePreset === name) activePreset = null;
   renderPresetSelect();
+  renderPresetChips();
 });
 /* Git 仓库：列表操作（更新/移除）与行内间隔编辑 */
 const $gitList = document.getElementById("git-list");
@@ -795,6 +828,9 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     cfg = await invoke("save_config", { cfg: next });
     applyPin();
     renderRootChips();
+    // 手动保存设置后范围可能已偏离预设，清除快捷 chips 高亮
+    activePreset = null;
+    renderPresetChips();
     // 3. 范围可能变化：重新同步 + 宽度立即生效
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
@@ -881,6 +917,7 @@ listen("ui-reset", () => {
     renderRootsEditor();
     renderRootChips();
     renderPresetSelect();
+    renderPresetChips();
     await loadHistory();
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
