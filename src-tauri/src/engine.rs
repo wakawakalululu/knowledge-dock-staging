@@ -363,7 +363,7 @@ impl Engine {
     /// 增量同步（多知识库根聚合）：只 stat 全部文件做 mtime 差异，
     /// **仅重读重切变更文件**（大库免全量重扫）；多根时展示路径带库名前缀
     /// roots: (路径, 显示名)；scope: 范围规则
-    pub fn sync_roots(&self, roots: &[(PathBuf, String, Vec<String>)], scope: &ScopeConfig) -> Result<Stats, String> {
+    pub fn sync_roots(&self, roots: &[crate::scope::RootSpec], scope: &ScopeConfig) -> Result<Stats, String> {
         if roots.is_empty() {
             return Ok(Stats { docs: 0, chunks: 0 });
         }
@@ -380,18 +380,24 @@ impl Engine {
             max_age_days: scope.max_age_days,
         };
         let mut plan: Vec<(indexer::FilePlan, String)> = Vec::new();
-        for (root, label, root_excludes) in roots {
-            // 每库独立排除规则与全局规则合并后生效
+        for spec in roots {
+            // 每库独立范围：排除规则与全局合并；扩展名/大小上限非空时覆盖全局
             let mut opts = base_opts.clone();
-            opts.exclude_globs.extend(root_excludes.iter().cloned());
-            let ps = indexer::scan_index_plan(root, &opts)?;
+            opts.exclude_globs.extend(spec.excludes.iter().cloned());
+            if !spec.exts.is_empty() {
+                opts.include_exts = spec.exts.clone();
+            }
+            if spec.max_file_kb > 0 {
+                opts.max_file_bytes = spec.max_file_kb * 1024;
+            }
+            let ps = indexer::scan_index_plan(&spec.path, &opts)?;
             for p in ps {
                 let rel = if multi {
-                    format!("{label}/{}", p.rel)
+                    format!("{}/{}", spec.label, p.rel)
                 } else {
                     p.rel
                 };
-                plan.push((indexer::FilePlan { rel, ..p }, label.clone()));
+                plan.push((indexer::FilePlan { rel, ..p }, spec.label.clone()));
             }
         }
 

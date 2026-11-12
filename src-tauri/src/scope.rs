@@ -15,10 +15,26 @@ pub struct KnowledgeRoot {
     /// 每库独立排除规则（与全局规则合并）
     #[serde(default)]
     pub root_exclude_globs: Vec<String>,
+    /// 每库独立扩展名覆盖（空 = 用全局 include_exts）
+    #[serde(default)]
+    pub root_exts: Vec<String>,
+    /// 每库单文件大小上限覆盖 KB（0 = 用全局 max_file_kb）
+    #[serde(default)]
+    pub root_max_file_kb: u64,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// 同步用的单根规格：路径 + 显示名 + 每库独立范围（排除/扩展名/大小上限）
+#[derive(Debug, Clone)]
+pub struct RootSpec {
+    pub path: std::path::PathBuf,
+    pub label: String,
+    pub excludes: Vec<String>,
+    pub exts: Vec<String>,
+    pub max_file_kb: u64,
 }
 
 /// 搜寻范围规则

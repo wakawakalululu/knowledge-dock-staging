@@ -9,6 +9,16 @@ mod search_tests {
     use std::fs;
     use std::path::PathBuf;
 
+    fn spec(dir: &std::path::Path, label: &str) -> crate::scope::RootSpec {
+        crate::scope::RootSpec {
+            path: dir.to_path_buf(),
+            label: label.to_string(),
+            excludes: Vec::new(),
+            exts: Vec::new(),
+            max_file_kb: 0,
+        }
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kd-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
@@ -69,7 +79,7 @@ mod search_tests {
         write(&root.join("劳动法.md"), LAW);
         write(&root.join("noise.md"), "# 笔记\n\n随便写点 2024 年的杂事，包含劳动法三个字但与加班无关。\n");
         let engine = Engine::open_or_create(&temp_dir("idx-law"), load_synonyms(None), load_stopwords(None)).unwrap();
-        let stats = engine.sync_roots(&[(root.clone(), "test".to_string(), Vec::new())], &ScopeConfig::default()).unwrap();
+        let stats = engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
         assert!(stats.docs >= 2 && stats.chunks >= 4, "{stats:?}");
 
         let r = engine.search("加班费", 10, None, None);
@@ -84,7 +94,7 @@ mod search_tests {
         let root = temp_dir("engine-syn");
         write(&root.join("qa.md"), QA);
         let engine = Engine::open_or_create(&temp_dir("idx-syn"), load_synonyms(None), load_stopwords(None)).unwrap();
-        engine.sync_roots(&[(root.clone(), "test".to_string(), Vec::new())], &ScopeConfig::default()).unwrap();
+        engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
 
         // “辞职”不在文档中，但同义词展开应命中“离职/解雇”
         let r = engine.search("辞职", 10, None, None);
@@ -99,13 +109,13 @@ mod search_tests {
         let root = temp_dir("engine-inc");
         write(&root.join("a.md"), "# A\n\n最初的关于公积金的内容。\n");
         let engine = Engine::open_or_create(&temp_dir("idx-inc"), load_synonyms(None), load_stopwords(None)).unwrap();
-        engine.sync_roots(&[(root.clone(), "test".to_string(), Vec::new())], &ScopeConfig::default()).unwrap();
+        engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
         assert!(engine.search("公积金", 10, None, None).hits.is_empty() == false);
 
         // 修改文件：旧词消失、新词出现
         std::thread::sleep(std::time::Duration::from_millis(20)); // 确保 mtime 变化
         write(&root.join("a.md"), "# A\n\n改写后的年金计划说明。\n");
-        let stats = engine.sync_roots(&[(root.clone(), "test".to_string(), Vec::new())], &ScopeConfig::default()).unwrap();
+        let stats = engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
         assert_eq!(stats.docs, 1);
         assert!(engine.search("公积金", 10, None, None).hits.is_empty(), "旧内容应被增量删除");
         assert!(!engine.search("年金", 10, None, None).hits.is_empty(), "新内容应被增量加入");
@@ -118,7 +128,7 @@ mod search_tests {
         write(&r1.join("劳动法.md"), LAW);
         write(&r2.join("手册.md"), "# 手册\n\n关于辞退赔偿的说明。\n");
         let engine = Engine::open_or_create(&temp_dir("idx-multi"), load_synonyms(None), load_stopwords(None)).unwrap();
-        let stats = engine.sync_roots(&[(r1, "multi-a".to_string(), Vec::new()), (r2, "multi-b".to_string(), Vec::new())], &ScopeConfig::default()).unwrap();
+        let stats = engine.sync_roots(&[spec(&r1, "multi-a"), spec(&r2, "multi-b")], &ScopeConfig::default()).unwrap();
         assert_eq!(stats.docs, 2, "两个根各 1 个文档: {stats:?}");
 
         let r = engine.search("赔偿", 10, None, None);

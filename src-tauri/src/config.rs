@@ -118,8 +118,8 @@ impl Config {
             .collect()
     }
 
-    /// 同步用 (路径, 显示名, 每库独立排除规则) 三元组
-    pub fn root_triples(&self) -> Vec<(PathBuf, String, Vec<String>)> {
+    /// 同步用单根规格（含每库独立范围覆盖）
+    pub fn root_specs(&self) -> Vec<crate::scope::RootSpec> {
         self.effective_roots()
             .into_iter()
             .map(|r| {
@@ -128,7 +128,13 @@ impl Config {
                 } else {
                     r.label.clone()
                 };
-                (PathBuf::from(r.path), label, r.root_exclude_globs.clone())
+                crate::scope::RootSpec {
+                    path: PathBuf::from(r.path),
+                    label,
+                    excludes: r.root_exclude_globs.clone(),
+                    exts: r.root_exts.clone(),
+                    max_file_kb: r.root_max_file_kb,
+                }
             })
             .collect()
     }
@@ -182,6 +188,8 @@ fn migrate(cfg: &mut Config) {
             label: basename_of(d),
             enabled: true,
             root_exclude_globs: Vec::new(),
+            root_exts: Vec::new(),
+            root_max_file_kb: 0,
         });
     }
 }

@@ -73,7 +73,7 @@ struct ContextResult {
 /// 后台执行一次多根同步并推送统计
 fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").root_triples();
+    let roots = state.cfg.lock().expect("cfg lock").root_specs();
     let scope = state.cfg.lock().expect("cfg lock").scope.clone();
     if roots.is_empty() {
         return;
@@ -92,7 +92,7 @@ fn sync_and_emit(app: &AppHandle) {
 /// 旧 watcher 被替换后通道关闭，旧监听线程自动退出（防线程累积）
 fn start_watchers(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").root_triples();
+    let roots = state.cfg.lock().expect("cfg lock").root_specs();
     if roots.is_empty() {
         return;
     }
@@ -101,8 +101,8 @@ fn start_watchers(app: &AppHandle) {
         Ok(w) => w,
         Err(_) => return,
     };
-    for (r, _, _) in &roots {
-        if watcher.watch(r, RecursiveMode::Recursive).is_err() {
+    for spec in &roots {
+        if watcher.watch(&spec.path, RecursiveMode::Recursive).is_err() {
             return;
         }
     }
@@ -305,7 +305,7 @@ fn apply_scope_template(name: String, app: AppHandle, state: State<'_, AppState>
     if let Some(ex) = tpl["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     if let Some(exts) = tpl["include_exts"].as_array() { cfg.scope.include_exts = exts.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     config::save(&app, &cfg);
-    let roots = cfg.root_triples();
+    let roots = cfg.root_specs();
     let scope = cfg.scope.clone();
     let _ = state.engine.sync_roots(&roots, &scope);
     Ok(cfg)
@@ -338,7 +338,7 @@ fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>)
     apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
-    let roots = cfg.root_triples();
+    let roots = cfg.root_specs();
     if !roots.is_empty() { let scope = cfg.scope.clone(); let _ = state.engine.sync_roots(&roots, &scope); start_watchers(&app); }
     Ok(cfg)
 }
@@ -368,7 +368,7 @@ fn import_scope_rules(app: AppHandle, json: String, state: State<'_, AppState>) 
     if let Some(kb) = data["max_file_kb"].as_u64() { cfg.scope.max_file_kb = kb; }
     if let Some(days) = data["max_age_days"].as_u64() { cfg.scope.max_age_days = days; }
     config::save(&app, &cfg);
-    let roots = cfg.root_triples();
+    let roots = cfg.root_specs();
     let scope = cfg.scope.clone();
     let _ = state.engine.sync_roots(&roots, &scope);
     Ok(cfg)
@@ -467,34 +467,45 @@ fn scope_check(path: String, state: State<'_, AppState>) -> ScopeCheckResult {
     }
     reasons.push("忽略目录 ✓".into());
 
-    // 扩展名
+    // 扩展名（每库覆盖优先于全局）
     let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase());
-    let exts = if scope.include_exts.is_empty() {
-        vec!["md".into(), "markdown".into(), "txt".into()]
+    let (exts, ext_src) = if !root.root_exts.is_empty() {
+        (root.root_exts.clone(), "每库覆盖")
+    } else if scope.include_exts.is_empty() {
+        (vec!["md".into(), "markdown".into(), "txt".into()], "默认")
     } else {
-        scope.include_exts.clone()
+        (scope.include_exts.clone(), "全局")
     };
     let ext_ok = matches!(ext.as_deref(), Some(x) if exts.iter().any(|e| e == x));
     if ext_ok {
-        reasons.push(format!("扩展名 ✓ ({:?})", ext.unwrap_or_default()));
+        reasons.push(format!("扩展名 ✓ ({:?} [{}])", ext.unwrap_or_default(), ext_src));
     } else {
-        reasons.push(format!("扩展名 ✗ {:?} 不在 [{}]", ext, exts.join(", ")));
+        reasons.push(format!(
+            "扩展名 ✗ {:?} 不在 [{}]（{}）",
+            ext,
+            exts.join(", "),
+            ext_src
+        ));
         return fail(Some(label), Some(rel), reasons);
     }
 
-    // 大小上限
-    let max_bytes = if scope.max_file_kb == 0 {
-        4 * 1024 * 1024
+    // 大小上限（每库覆盖优先于全局）
+    let max_kb = if root.root_max_file_kb > 0 {
+        root.root_max_file_kb
+    } else if scope.max_file_kb == 0 {
+        4096
     } else {
-        scope.max_file_kb * 1024
+        scope.max_file_kb
     };
+    let kb_src = if root.root_max_file_kb > 0 { "每库覆盖" } else { "全局" };
+    let max_bytes = max_kb * 1024;
     let (size_ok, size_kb) = std::fs::metadata(&p)
         .map(|m| (m.len() <= max_bytes, m.len() / 1024))
         .unwrap_or((false, 0));
     if size_ok {
-        reasons.push(format!("大小 ✓ ({size_kb} KB ≤ {} KB)", scope.max_file_kb));
+        reasons.push(format!("大小 ✓ ({size_kb} KB ≤ {max_kb} KB [{kb_src}])"));
     } else {
-        reasons.push(format!("大小 ✗ {size_kb} KB 超过上限 {} KB", scope.max_file_kb));
+        reasons.push(format!("大小 ✗ {size_kb} KB 超过上限 {max_kb} KB（{kb_src}）"));
         return fail(Some(label), Some(rel), reasons);
     }
 
@@ -692,6 +703,39 @@ fn collect_health_issues(cfg: &Config) -> Vec<HealthIssue> {
         });
     }
 
+    // 6. 每库覆盖值域
+    for r in &cfg.roots {
+        let bad: Vec<String> = r
+            .root_exts
+            .iter()
+            .filter(|e| e.trim().is_empty() || e.starts_with('.') || **e != e.to_lowercase())
+            .cloned()
+            .collect();
+        if !bad.is_empty() {
+            issues.push(HealthIssue {
+                kind: "bad_value".into(),
+                severity: "warn".into(),
+                message: format!(
+                    "库「{}」扩展名覆盖不规范: [{}]（含空项/点前缀/大写）",
+                    r.label,
+                    bad.join(", ")
+                ),
+                fixable: true,
+            });
+        }
+        if r.root_max_file_kb > 1_000_000_000 {
+            issues.push(HealthIssue {
+                kind: "bad_value".into(),
+                severity: "warn".into(),
+                message: format!(
+                    "库「{}」大小上限覆盖异常: {} KB（超过 1TB）",
+                    r.label, r.root_max_file_kb
+                ),
+                fixable: true,
+            });
+        }
+    }
+
     issues
 }
 
@@ -780,6 +824,22 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
         let (re, ch) = clean(&r.root_exclude_globs);
         if ch { fixed.push(format!("清洗库「{}」独立排除规则", r.label)); }
         r.root_exclude_globs = re;
+        // 每库扩展名覆盖清洗
+        let before = r.root_exts.clone();
+        r.root_exts = r
+            .root_exts
+            .iter()
+            .map(|e| e.trim().trim_start_matches('.').to_lowercase())
+            .filter(|e| !e.is_empty())
+            .collect();
+        if r.root_exts != before {
+            fixed.push(format!("清洗库「{}」扩展名覆盖", r.label));
+        }
+        // 每库大小上限异常回正（0 = 用全局）
+        if r.root_max_file_kb > 1_000_000_000 {
+            r.root_max_file_kb = 0;
+            fixed.push(format!("库「{}」大小上限覆盖异常回正为用全局", r.label));
+        }
     }
 
     // 4. git 源：克隆缺失→移除源（根若存在一并移除）；根缺失→补注册
@@ -814,6 +874,8 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
                 label: s.name.clone(),
                 enabled: true,
                 root_exclude_globs: vec![".git/".into()],
+                root_exts: Vec::new(),
+                root_max_file_kb: 0,
             });
             fixed.push(format!("补注册 git 源「{}」为知识根", s.name));
         }
@@ -843,7 +905,7 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
     // 有变更才落盘 + 重新同步
     if !fixed.is_empty() {
         // 同步索引到修复后的范围
-        let roots = cfg.root_triples();
+        let roots = cfg.root_specs();
         let scope = cfg.scope.clone();
         *state.cfg.lock().expect("cfg lock") = cfg.clone();
         config::save(&app, &cfg);
@@ -857,7 +919,7 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
 
 #[tauri::command]
 fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
-    let roots = state.cfg.lock().expect("cfg lock").root_triples();
+    let roots = state.cfg.lock().expect("cfg lock").root_specs();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
     }
@@ -898,6 +960,8 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
                 label: scope::basename_of(&dir_str),
                 enabled: true,
                 root_exclude_globs: Vec::new(),
+                root_exts: Vec::new(),
+                root_max_file_kb: 0,
             });
         }
         if cfg.knowledge_dir.is_none() {
@@ -906,7 +970,7 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
         config::save(&app, &cfg);
     }
 
-    let roots = state.cfg.lock().expect("cfg lock").root_triples();
+    let roots = state.cfg.lock().expect("cfg lock").root_specs();
     let scope = state.cfg.lock().expect("cfg lock").scope.clone();
     let stats = state.engine.sync_roots(&roots, &scope).ok();
     start_watchers(&app);
@@ -1010,7 +1074,7 @@ fn load_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
     start_watchers(&app);
-    let roots = cfg.root_triples();
+    let roots = cfg.root_specs();
     let scope = cfg.scope.clone();
     let _ = state.engine.sync_roots(&roots, &scope);
     Ok(cfg)
@@ -1070,7 +1134,7 @@ fn import_config(app: AppHandle, state: State<'_, AppState>) -> Result<Config, S
     apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
-    let roots = cfg.root_triples();
+    let roots = cfg.root_specs();
     if !roots.is_empty() {
         let scope = cfg.scope.clone();
         let _ = state.engine.sync_roots(&roots, &scope);
@@ -1089,14 +1153,14 @@ fn expand_context(
     after: usize,
     state: State<'_, AppState>,
 ) -> Result<ContextResult, String> {
-    let roots = state.cfg.lock().expect("cfg lock").root_triples();
+    let roots = state.cfg.lock().expect("cfg lock").root_specs();
     if roots.is_empty() {
         return Err("尚未设置知识库目录".into());
     }
     let canon_path = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
     let allowed = roots
         .iter()
-        .filter_map(|(r, _, _)| std::fs::canonicalize(r).ok())
+        .filter_map(|spec| std::fs::canonicalize(&spec.path).ok())
         .any(|root| canon_path.starts_with(&root));
     if !allowed {
         return Err("路径不在知识库目录内".into());
@@ -1195,7 +1259,7 @@ fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
             s.last_sync = gitsync::now_secs();
             s.last_error = None;
         }
-        let roots = cfg.root_triples();
+        let roots = cfg.root_specs();
         let scope = cfg.scope.clone();
         config::save(app, &cfg);
         if roots.is_empty() {
@@ -1312,9 +1376,11 @@ fn git_clone_blocking(
                 label: name.clone(),
                 enabled: true,
                 root_exclude_globs: vec![".git/".into()],
+                root_exts: Vec::new(),
+                root_max_file_kb: 0,
             });
         }
-        let roots = cfg.root_triples();
+        let roots = cfg.root_specs();
         let scope = cfg.scope.clone();
         config::save(app, &cfg);
         if roots.is_empty() {
@@ -1372,7 +1438,7 @@ fn git_remove_blocking(app: &AppHandle, name: String) -> Result<Config, String> 
         let dir = repos_dir(app).join(&name);
         cfg.roots
             .retain(|r| r.path != dir.to_string_lossy().to_string());
-        let roots = cfg.root_triples();
+        let roots = cfg.root_specs();
         let scope = cfg.scope.clone();
         config::save(app, &cfg);
         if !roots.is_empty() {

@@ -445,7 +445,7 @@ function openHit(pos, reveal) {
 }
 
 /* ---------- 设置面板 ---------- */
-/** 范围页：根列表编辑器 */
+/** 范围页：根列表编辑器（每库可展开配置独立范围覆盖） */
 function renderRootsEditor() {
   const roots = cfg && cfg.roots ? cfg.roots : [];
   $rootsList.innerHTML = roots.length
@@ -453,11 +453,26 @@ function renderRootsEditor() {
         .map((r, i) => {
           const label = rootLabelOf(r);
           return `
-      <div class="root-row" data-i="${i}">
-        <input class="set-input root-label" data-k="label" value="${escapeHtml(r.label)}" placeholder="显示名" spellcheck="false" />
-        <span class="root-path" title="${escapeHtml(r.path)}">${escapeHtml(shortPath(r.path))}</span>
-        <label class="root-en"><input type="checkbox" data-k="enabled" ${r.enabled ? "checked" : ""} /> 启用</label>
-        <button class="root-del" data-del="${i}">移除</button>
+      <div class="root-wrap" data-i="${i}">
+        <div class="root-row">
+          <input class="set-input root-label" data-k="label" value="${escapeHtml(r.label)}" placeholder="显示名" spellcheck="false" />
+          <span class="root-path" title="${escapeHtml(r.path)}">${escapeHtml(shortPath(r.path))}</span>
+          <button class="root-cfg" data-cfg="${i}" title="每库独立范围覆盖（排除/扩展名/大小上限）">配置</button>
+          <label class="root-en"><input type="checkbox" data-k="enabled" ${r.enabled ? "checked" : ""} /> 启用</label>
+          <button class="root-del" data-del="${i}">移除</button>
+        </div>
+        <div class="root-detail" hidden>
+          <div class="set-row">
+            <span class="lbl">排除</span>
+            <input class="set-input mono rd-ex" value="${escapeHtml((r.root_exclude_globs || []).join(","))}" placeholder="dir/ 或 *.tmp，逗号分隔（留空用全局）" spellcheck="false" />
+          </div>
+          <div class="set-row">
+            <span class="lbl">扩展名</span>
+            <input class="set-input rd-ext" value="${escapeHtml((r.root_exts || []).join(", "))}" placeholder="留空用全局" spellcheck="false" />
+            <span class="lbl">上限KB</span>
+            <input class="set-input rd-kb" type="number" min="0" step="64" value="${r.root_max_file_kb || ""}" placeholder="默认" />
+          </div>
+        </div>
       </div>`;
         })
         .join("")
@@ -909,25 +924,40 @@ document.getElementById("btn-clear-history").addEventListener("click", async () 
   renderHistory();
 });
 
-/* 根列表编辑器（事件委托） */
+/* 根列表编辑器（事件委托；root-wrap 聚合行与展开区） */
 $rootsList.addEventListener("input", (e) => {
-  const row = e.target.closest(".root-row");
-  if (!row || !cfg) return;
-  const i = Number(row.dataset.i);
+  const wrap = e.target.closest(".root-wrap");
+  if (!wrap || !cfg) return;
+  const i = Number(wrap.dataset.i);
+  const r = cfg.roots[i];
+  if (!r) return;
   if (e.target.dataset.k === "label") {
-    cfg.roots[i].label = e.target.value;
+    r.label = e.target.value;
     renderRootChips();
+  } else if (e.target.classList.contains("rd-ex")) {
+    r.root_exclude_globs = e.target.value.split(/[,，\n]+/).map((s) => s.trim()).filter(Boolean);
+  } else if (e.target.classList.contains("rd-ext")) {
+    r.root_exts = e.target.value.split(/[,\s，]+/).map((s) => s.trim().toLowerCase().replace(/^\./, "")).filter(Boolean);
+  } else if (e.target.classList.contains("rd-kb")) {
+    r.root_max_file_kb = Math.max(0, Number(e.target.value) || 0);
   }
 });
 $rootsList.addEventListener("change", (e) => {
-  const row = e.target.closest(".root-row");
-  if (!row || !cfg) return;
-  const i = Number(row.dataset.i);
+  const wrap = e.target.closest(".root-wrap");
+  if (!wrap || !cfg) return;
+  const i = Number(wrap.dataset.i);
   if (e.target.dataset.k === "enabled") {
     cfg.roots[i].enabled = e.target.checked;
   }
 });
 $rootsList.addEventListener("click", (e) => {
+  const cfgBtn = e.target.closest(".root-cfg");
+  if (cfgBtn) {
+    const wrap = cfgBtn.closest(".root-wrap");
+    const detail = wrap && wrap.querySelector(".root-detail");
+    if (detail) detail.hidden = !detail.hidden;
+    return;
+  }
   const del = e.target.closest(".root-del");
   if (!del || !cfg) return;
   const i = Number(del.dataset.del);

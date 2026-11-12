@@ -664,3 +664,27 @@ html, body {
   border-style: solid;
 }
 .diag-line.warn-line { color: #b45309; }
+
+/* 每库独立范围覆盖展开区 */
+.root-wrap { display: flex; flex-direction: column; gap: 2px; }
+.root-cfg {
+  flex: none;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11.5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.root-cfg:hover { background: rgba(79, 124, 255, 0.12); }
+.root-detail {
+  margin-left: 14px;
+  padding: 4px 0 4px 10px;
+  border-left: 2px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.root-detail .rd-ext { flex: 1; min-width: 0; }
+.root-detail .rd-kb { flex: none; width: 90px; }
