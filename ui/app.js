@@ -58,6 +58,7 @@ let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
 let activePreset = null;  // 当前生效的范围预设（快捷 chips 高亮；手动保存设置后清除）
+let sortMode = "rel";     // 结果显示：rel 相关度 | mtime 最近修改 | group 按库分组
 
 const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
 const TYPE_ALIAS = {
@@ -267,8 +268,19 @@ function render(query) {
       "</div>";
     return;
   }
+  // 分组模式下预计算各库条数，root 变化处插 sticky 库头
+  const groupCounts = new Map();
+  for (const { h } of visible) {
+    groupCounts.set(h.root, (groupCounts.get(h.root) || 0) + 1);
+  }
+  let prevRoot = null;
   $resList.innerHTML = visible
     .map(({ h, i }, pos) => {
+      const head =
+        sortMode === "group" && h.root !== prevRoot
+          ? `<div class="group-head">${escapeHtml(h.root || "未分库")} · ${groupCounts.get(h.root) || 0} 条</div>`
+          : "";
+      prevRoot = h.root;
       const bc = (h.breadcrumbs && h.breadcrumbs.length)
         ? `<div class="hit-bc">${h.breadcrumbs.map((b) => escapeHtml(b)).join('<span class="bc-sep">›</span>')}</div>`
         : "";
@@ -282,7 +294,7 @@ function render(query) {
       const ctx = open
         ? renderCtx(ctxCache[i], i)
         : "";
-      return `
+      return head + `
       <div class="hit ${pos === active ? "active" : ""}" data-pos="${pos}">
         <div class="hit-top">
           ${badge}
@@ -357,9 +369,26 @@ function setActive(pos) {
   if (el) el.scrollIntoView({ block: "nearest" });
 }
 
-/** 类型过滤后的可见列表（类型 chips 已下沉引擎，此处仅保留结构） */
+/** 类型过滤后的可见列表（类型 chips 已下沉引擎，此处按显示模式重排） */
 function filteredHits() {
-  return hits.map((h, i) => ({ h, i }));
+  const base = hits.map((h, i) => ({ h, i }));
+  if (sortMode === "mtime") {
+    // 最近修改优先（mtime 缺失排最后）
+    base.sort((a, b) => (b.h.mtime || 0) - (a.h.mtime || 0));
+  } else if (sortMode === "group") {
+    // 组序 = 各库在相关度序中首次出现的顺序，组内保持相关度序
+    const order = [];
+    const seen = new Set();
+    for (const { h } of base) {
+      if (!seen.has(h.root)) {
+        seen.add(h.root);
+        order.push(h.root);
+      }
+    }
+    const rank = new Map(order.map((r, idx) => [r, idx]));
+    base.sort((a, b) => rank.get(a.h.root) - rank.get(b.h.root));
+  }
+  return base;
 }
 
 /** 根据输入与面板状态刷新：面板显隐 + 窗口展开/折叠 */
@@ -629,6 +658,15 @@ $chipsType.addEventListener("click", (e) => {
   typeFilter = btn.dataset.f;
   setChipActive($chipsType, typeFilter);
   doSearch();
+});
+
+/* 显示模式切换（相关度/最新修改/按库分组）——纯前端重排，不重搜 */
+document.querySelectorAll(".mini-sort").forEach((b) => {
+  b.addEventListener("click", () => {
+    sortMode = b.dataset.s;
+    document.querySelectorAll(".mini-sort").forEach((x) => x.classList.toggle("active", x === b));
+    render(lastQuery);
+  });
 });
 
 /* 库 chips（动态生成，下沉引擎） */

@@ -117,6 +117,9 @@ pub struct Hit {
     pub root: String,
     /// 绝对路径（打开 / 上下文展开）
     pub abs: String,
+    /// 源文件修改时间（unix 毫秒；stat 失败为 0）——"最近修改"排序用
+    #[serde(default)]
+    pub mtime: u64,
     #[serde(skip_serializing)]
     pub score: f32,
 }
@@ -676,6 +679,7 @@ impl Engine {
                 root,
                 snippet: make_snippet(&content, &effective),
                 line,
+                mtime: crate::indexer::mtime_ms(std::path::Path::new(&abs)),
                 abs,
                 score,
             });
