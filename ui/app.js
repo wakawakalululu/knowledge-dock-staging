@@ -59,6 +59,8 @@ let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下�
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
 let activePreset = null;  // 当前生效的范围预设（快捷 chips 高亮；手动保存设置后清除）
 let sortMode = "rel";     // 结果显示：rel 相关度 | mtime 最近修改 | group 按库分组
+let searchSeq = 0;        // 搜索请求序号：过期响应丢弃（快速输入竞态守卫）
+let indexBounceTimer = null; // index-updated 防抖计时器
 
 const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
 const TYPE_ALIAS = {
@@ -484,6 +486,7 @@ async function doSearch() {
   }
   const parsed = parseScopePrefix(raw);
   lastQuery = parsed.q;
+  const seq = ++searchSeq; // 本次请求的序号；响应到达时若已过期则丢弃
   let r;
   try {
     r = await invoke("search", {
@@ -492,13 +495,17 @@ async function doSearch() {
       rootFilter: parsed.rootF === "all" ? null : parsed.rootF,
       limit: searchLimit,
     });
-    hits = r.hits;
-    lastTerms = r.terms || [];
   } catch (e) {
-    hits = [];
-    lastTerms = [];
-    console.error(e);
+    if (seq === searchSeq) {
+      hits = [];
+      lastTerms = [];
+      console.error(e);
+    }
+    return;
   }
+  if (seq !== searchSeq) return; // 已有更新的请求，丢弃过期响应
+  hits = r.hits;
+  lastTerms = r.terms || [];
   // 新结果集：上下文缓存必须清空，否则命中序号错位会展示旧内容
   ctxCache = {};
   ctxOpen = {};
@@ -1238,11 +1245,16 @@ $rootsList.addEventListener("click", (e) => {
   renderRootChips();
 });
 
-/* 索引变更（文件监听触发）→ 刷新统计并重跑当前搜索 */
+/* 索引变更（文件监听触发）→ 统计即时刷新；重搜 trailing 防抖 1.5s
+   （大库连续变更时 watcher 每轮都 emit，避免搜索风暴） */
 listen("index-updated", (ev) => {
   const s = ev.payload;
   $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
-  if ($q.value.trim()) doSearch();
+  if (!$q.value.trim()) return;
+  clearTimeout(indexBounceTimer);
+  indexBounceTimer = setTimeout(() => {
+    if ($q.value.trim()) doSearch();
+  }, 1500);
 });
 
 /* WebDAV 同步进度（下载 n/m 实时显示） */
