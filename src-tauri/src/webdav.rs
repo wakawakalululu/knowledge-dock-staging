@@ -31,22 +31,6 @@ fn run_curl(args: &[&str]) -> Result<String, String> {
     let out = cmd
         .output()
         .map_err(|e| format!("无法执行 curl（Windows 10+ 自带）: {e}"))?;
-    // 诊断日志（临时）：记录每次 curl 的命令与结果摘要
-    if let Ok(mut log) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(std::env::temp_dir().join("kd-webdav.log"))
-    {
-        use std::io::Write;
-        let _ = writeln!(
-            log,
-            "[curl] args0={} status={} out_len={} err={}",
-            args.first().unwrap_or(&""),
-            out.status,
-            out.stdout.len(),
-            String::from_utf8_lossy(&out.stderr).trim().chars().take(120).collect::<String>()
-        );
-    }
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -226,10 +210,14 @@ pub fn list_remote(base_url: &str, username: &str, password: &str) -> Result<Vec
     let mut out: Vec<RemoteFile> = Vec::new();
     let mut queue: Vec<String> = vec![trimmed.to_string() + "/"];
     let base_prefix = format!("{origin}{base_path}").to_lowercase();
-    let mut visited = 0usize;
+    // 防环：服务器可能把当前集合自身也列进 Depth:1 响应（RFC 允许）
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
     while let Some(dir_url) = queue.pop() {
-        visited += 1;
-        if visited > 2000 {
+        let key = dir_url.trim_end_matches('/').to_lowercase();
+        if !visited.insert(key) {
+            continue;
+        }
+        if visited.len() > 2000 {
             return Err("目录层级过深或条目过多（>2000），已中止".into());
         }
         let (dirs, files) = propfind_level(&auth, &dir_url, "1")?;
