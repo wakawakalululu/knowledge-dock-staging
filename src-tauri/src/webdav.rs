@@ -57,7 +57,7 @@ fn propfind_level(
         "-H",
         "Content-Type: application/xml",
         "--data",
-        "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAOLAP:\"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>",
+        "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>",
         depth_url,
     ])?;
     // 命名空间前缀各服务器不一（D:/d:/ns0:），宽松匹配标签名（忽略前缀）

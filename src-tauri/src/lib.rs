@@ -1705,6 +1705,29 @@ fn webdav_add_blocking(
     let _guard = state.webdav_lock.lock().expect("webdav lock");
     webdav::test_connection(&url, &username, &password)?;
 
+    // 先做首次镜像同步，成功后才写入配置（失败不留残骸）
+    let remote = webdav::list_remote(&url, &username, &password).map_err(|e| {
+        format!("枚举远端失败: {e}")
+    })?;
+    let local_root = webdav_dir(app).join(&name);
+    std::fs::create_dir_all(&local_root).map_err(|e| format!("创建镜像目录失败: {e}"))?;
+    let max_kb = {
+        let cfg = state.cfg.lock().expect("cfg lock");
+        cfg.scope.max_file_kb
+    };
+    let (to_download, _to_delete) = webdav::diff_mirror(&remote, &Default::default(), &local_root, max_kb);
+    for (rf, local) in &to_download {
+        if let Some(parent) = local.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let file_url = format!("{}/{}", url.trim_end_matches('/'), rf.rel);
+        webdav::download(&file_url, &username, &password, local)
+            .map_err(|e| format!("下载 {} 失败: {e}", rf.rel))?;
+    }
+    let mirror: webdav::MirrorState = remote.iter().map(|r| (r.rel.clone(), r.clone())).collect();
+    save_mirror(app, &name, &mirror);
+
+    // 同步成功：写入配置 + 注册知识根
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
     cfg.webdav_sources.push(config::WebdavSource {
         name: name.clone(),
@@ -1716,7 +1739,7 @@ fn webdav_add_blocking(
         last_sync: gitsync::now_secs(),
         last_error: None,
     });
-    let dir_str = webdav_dir(app).join(&name).to_string_lossy().to_string();
+    let dir_str = local_root.to_string_lossy().to_string();
     if !cfg.roots.iter().any(|r| r.path == dir_str) {
         cfg.roots.push(config::KnowledgeRoot {
             path: dir_str,
@@ -1731,8 +1754,14 @@ fn webdav_add_blocking(
     config::save(app, &cfg);
     drop(_guard);
 
-    // 首次镜像同步（复用手动路径，会顺带索引同步）
-    webdav_sync_one(app, &name)?;
+    // 索引增量同步
+    {
+        let roots = cfg.root_specs();
+        let scope = cfg.scope.clone();
+        if !roots.is_empty() {
+            let _ = state.engine.sync_roots(&roots, &scope);
+        }
+    }
     start_watchers(app);
     let cfg_out = state.cfg.lock().expect("cfg lock").clone();
     Ok(cfg_out)
