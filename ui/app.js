@@ -304,8 +304,17 @@ function render(query) {
           ${badge}
           <span class="hit-title">${highlight(h.title, query)}</span>
           ${rootTag}
-          <span class="hit-path">${escapeHtml(shortPath(h.path))}</span>
+          <span class="hit-path" title="${escapeHtml(h.abs)}">${escapeHtml(shortPath(h.path))}</span>
           ${mt}
+          <button class="ctx-btn act-copy" data-abs="${escapeHtml(h.abs)}" title="复制完整路径">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </button>
+          <button class="ctx-btn act-reveal" data-abs="${escapeHtml(h.abs)}" title="在资源管理器中显示">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M2 8h20"/></svg>
+          </button>
+          <button class="ctx-btn act-open" data-abs="${escapeHtml(h.abs)}" title="用默认程序打开">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+          </button>
           <button class="ctx-btn" data-ctx="${i}" title="展开上下文">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></svg>
           </button>
@@ -318,8 +327,15 @@ function render(query) {
     .join("");
 
   $resList.querySelectorAll(".hit").forEach((el) => {
-    el.addEventListener("click", () => openHit(Number(el.dataset.pos), false));
-    el.addEventListener("dblclick", () => openHit(Number(el.dataset.pos), true));
+    el.addEventListener("click", (e) => {
+      // 点在操作按钮上时不触发打开
+      if (e.target.closest(".ctx-btn")) return;
+      openHit(Number(el.dataset.pos), false);
+    });
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.closest(".ctx-btn")) return;
+      openHit(Number(el.dataset.pos), true);
+    });
     el.addEventListener("mousemove", () => setActive(Number(el.dataset.pos)));
   });
   // 当前显示模式随计数一起展示（便于确认切换是否生效）
@@ -340,6 +356,47 @@ function render(query) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleContext(Number(btn.dataset.ctx));
+    });
+  });
+  // 条目操作：复制路径 / 资源管理器定位 / 默认程序打开
+  const copyText = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      // WebView2 剪贴板 API 受限时退回 execCommand
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    }
+  };
+  $resList.querySelectorAll(".act-copy").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const ok = await copyText(btn.dataset.abs);
+      $stats.textContent = ok ? "路径已复制" : "复制失败";
+    });
+  });
+  $resList.querySelectorAll(".act-reveal").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      invoke("reveal_file", { path: btn.dataset.abs }).catch((err) =>
+        ($stats.textContent = "定位失败: " + err)
+      );
+    });
+  });
+  $resList.querySelectorAll(".act-open").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      invoke("open_file", { path: btn.dataset.abs }).catch((err) =>
+        ($stats.textContent = "打开失败: " + err)
+      );
     });
   });
 }
@@ -544,6 +601,7 @@ function renderGitList() {
         : escapeHtml(relTime(r.last_sync));
       return `
     <div class="git-row" data-name="${escapeHtml(r.name)}">
+      <label class="root-en" title="启用/停用该源"><input type="checkbox" data-k="enabled" ${r.enabled ? "checked" : ""} /></label>
       <span class="git-name" title="${escapeHtml(r.url)}">${escapeHtml(r.name)}</span>
       <span class="git-branch">${escapeHtml(r.branch || "默认")}</span>
       <input class="set-input git-int" data-k="interval" type="number" min="0" step="5" value="${r.interval_min || 0}" title="间隔分钟，0=仅手动" />
@@ -571,6 +629,7 @@ function renderDavList() {
         : escapeHtml(relTime(s.last_sync));
       return `
     <div class="git-row" data-name="${escapeHtml(s.name)}">
+      <label class="root-en" title="启用/停用该源"><input type="checkbox" data-k="enabled" ${s.enabled ? "checked" : ""} /></label>
       <span class="git-name" title="${escapeHtml(s.url)}">${escapeHtml(s.name)}</span>
       <span class="git-branch">WebDAV</span>
       <input class="set-input git-int" data-k="interval" type="number" min="0" step="5" value="${s.interval_min || 0}" title="间隔分钟，0=仅手动" />
@@ -587,8 +646,9 @@ function openSettings() {
   renderPresetSelect();
   renderGitList();
   renderDavList();
-  settingsTab = "scope";
-  activateTab("scope");
+  // 记住上次使用的设置 Tab
+  settingsTab = localStorage.getItem("kd-settings-tab") || "scope";
+  activateTab(settingsTab);
   if (cfg) {
     $setExcludes.value = (cfg.scope && cfg.scope.exclude_globs ? cfg.scope.exclude_globs : []).join("\n");
     $setIncludes.value = (cfg.scope && cfg.scope.include_globs ? cfg.scope.include_globs : []).join("\n");
@@ -616,6 +676,7 @@ function closeSettings() {
 
 function activateTab(name) {
   settingsTab = name;
+  try { localStorage.setItem("kd-settings-tab", name); } catch (_) {}
   $settingsTabs.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $settings.querySelectorAll(".tab-pane").forEach((p) => {
     p.hidden = p.id !== "tab-" + name;
@@ -887,12 +948,17 @@ if ($gitList) {
       }
     }
   });
-  // 行内间隔编辑 → 写入本地 cfg（随"保存设置"提交生效）
+  // 行内间隔/启用编辑 → 写入本地 cfg（随"保存设置"提交生效）
   $gitList.addEventListener("change", (e) => {
-    if (e.target.dataset.k !== "interval" || !cfg) return;
     const row = e.target.closest(".git-row");
+    if (!row || !cfg) return;
     const src = cfg.git_sources.find((s) => s.name === row.dataset.name);
-    if (src) src.interval_min = Math.max(0, Number(e.target.value) || 0);
+    if (!src) return;
+    if (e.target.dataset.k === "interval") {
+      src.interval_min = Math.max(0, Number(e.target.value) || 0);
+    } else if (e.target.dataset.k === "enabled") {
+      src.enabled = e.target.checked;
+    }
   });
 }
 
@@ -955,10 +1021,15 @@ if ($davList) {
     }
   });
   $davList.addEventListener("change", (e) => {
-    if (e.target.dataset.k !== "interval" || !cfg) return;
     const row = e.target.closest(".git-row");
+    if (!row || !cfg) return;
     const src = cfg.webdav_sources.find((s) => s.name === row.dataset.name);
-    if (src) src.interval_min = Math.max(0, Number(e.target.value) || 0);
+    if (!src) return;
+    if (e.target.dataset.k === "interval") {
+      src.interval_min = Math.max(0, Number(e.target.value) || 0);
+    } else if (e.target.dataset.k === "enabled") {
+      src.enabled = e.target.checked;
+    }
   });
 }
 
