@@ -345,8 +345,18 @@ pub fn dpapi_encrypt(plain: &str) -> Result<String, String> {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("无法执行 powershell: {e}"))?;
-    child.stdin.as_mut().unwrap().write_all(plain.as_bytes())?;
-    child.stdin.as_mut().unwrap().flush()?;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(plain.as_bytes())
+        .map_err(|e| format!("写入 DPAPI 输入失败: {e}"))?;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .flush()
+        .map_err(|e| format!("刷新 DPAPI 输入失败: {e}"))?;
     drop(child.stdin.take());
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if !out.status.success() {

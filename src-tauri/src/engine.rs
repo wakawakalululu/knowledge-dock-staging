@@ -703,7 +703,8 @@ fn build(parser: &QueryParser, effective: &[String]) -> Option<Box<dyn tantivy::
         Ok(q) => Some(q),
         Err(e) => {
             #[cfg(debug_assertions)]
-            eprintln!("[engine] parse_query 失败({e})，尝试加引号兜底: {joined}");
+            eprintln!("[engine] parse_query 失败({e:?})，尝试加引号兜底: {joined}");
+            let _ = &e;
             let quoted = effective
                 .iter()
                 .map(|t| format!("\"{}\"", t.replace('"', "")))
