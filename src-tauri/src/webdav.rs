@@ -31,6 +31,22 @@ fn run_curl(args: &[&str]) -> Result<String, String> {
     let out = cmd
         .output()
         .map_err(|e| format!("无法执行 curl（Windows 10+ 自带）: {e}"))?;
+    // 诊断日志（临时）：记录每次 curl 的命令与结果摘要
+    if let Ok(mut log) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("kd-webdav.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(
+            log,
+            "[curl] args0={} status={} out_len={} err={}",
+            args.first().unwrap_or(&""),
+            out.status,
+            out.stdout.len(),
+            String::from_utf8_lossy(&out.stderr).trim().chars().take(120).collect::<String>()
+        );
+    }
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {

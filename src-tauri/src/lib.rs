@@ -1531,6 +1531,19 @@ fn webdav_record_error(app: &AppHandle, name: &str, err: &str) {
     config::save(app, &cfg);
 }
 
+/// WebDAV 诊断日志（临时，写入系统临时目录）
+fn dav_log(msg: &str) {
+    if let Ok(mut log) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("kd-webdav.log"))
+    {
+        use std::io::Write;
+        let ts = gitsync::now_secs();
+        let _ = writeln!(log, "[dav {ts}] {msg}");
+    }
+}
+
 /// 对单个 WebDAV 源执行镜像同步（手动与定时共用）
 fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
     let (url, username, password) = {
@@ -1668,6 +1681,7 @@ async fn webdav_add(
     name: String,
     interval_min: u64,
 ) -> Result<Config, String> {
+    dav_log("webdav_add command invoked");
     tauri::async_runtime::spawn_blocking(move || {
         webdav_add_blocking(&app, url, username, password, name, interval_min)
     })
@@ -1683,6 +1697,7 @@ fn webdav_add_blocking(
     name: String,
     interval_min: u64,
 ) -> Result<Config, String> {
+    dav_log(&format!("add entry url={url} name={name}"));
     let url = url.trim().to_string();
     if url.is_empty() {
         return Err("WebDAV URL 不能为空".into());
@@ -1704,11 +1719,14 @@ fn webdav_add_blocking(
 
     let _guard = state.webdav_lock.lock().expect("webdav lock");
     webdav::test_connection(&url, &username, &password)?;
+    dav_log("test_connection ok");
 
     // 先做首次镜像同步，成功后才写入配置（失败不留残骸）
     let remote = webdav::list_remote(&url, &username, &password).map_err(|e| {
+        dav_log(&format!("list_remote err: {e}"));
         format!("枚举远端失败: {e}")
     })?;
+    dav_log(&format!("list_remote ok files={}", remote.len()));
     let local_root = webdav_dir(app).join(&name);
     std::fs::create_dir_all(&local_root).map_err(|e| format!("创建镜像目录失败: {e}"))?;
     let max_kb = {
