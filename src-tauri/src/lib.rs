@@ -1203,6 +1203,13 @@ fn import_config(app: AppHandle, state: State<'_, AppState>) -> Result<Config, S
         let _ = state.engine.sync_roots(&roots, &scope);
         start_watchers(&app);
     }
+    // WebDAV 源：导入后立即验证凭据并重建镜像（跨机导入的 DPAPI 密文
+    // 解不开 → last_error 标记提示重新填写密码）
+    for s in &cfg.webdav_sources {
+        if let Err(e) = webdav_sync_one(&app, &s.name) {
+            webdav_record_error(&app, &s.name, &e);
+        }
+    }
     Ok(cfg)
 }
 

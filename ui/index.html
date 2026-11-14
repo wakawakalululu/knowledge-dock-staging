@@ -167,6 +167,19 @@
       </div>
 
       <div class="tab-pane" id="tab-general" hidden>
+        <div class="set-col">
+          <span class="lbl-line">配置迁移（导出/导入全部设置，含知识库、Git 与 WebDAV 源；WebDAV 凭据加密绑定本机，跨机导入后需重新填写密码）</span>
+          <div class="set-row">
+            <button id="btn-export-cfg" class="mini-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+              导出配置
+            </button>
+            <button id="btn-import-cfg" class="mini-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+              导入配置
+            </button>
+          </div>
+        </div>
         <div class="set-row">
           <span class="lbl">全局快捷键</span>
           <input id="set-shortcut" class="set-input" type="text" placeholder="Alt+Space" spellcheck="false" />

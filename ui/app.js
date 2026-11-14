@@ -1079,6 +1079,43 @@ document.getElementById("btn-dav-add").addEventListener("click", async () => {
   }
 });
 
+/* 配置迁移：导出 / 导入（含 git+WebDAV 源） */
+document.getElementById("btn-export-cfg").addEventListener("click", async () => {
+  $stats.textContent = "导出中…";
+  try {
+    const path = await invoke("export_config");
+    $stats.textContent = "已导出: " + path;
+  } catch (err) {
+    if (String(err).includes("已取消")) {
+      $stats.textContent = "就绪";
+    } else {
+      $stats.textContent = "导出失败: " + err;
+    }
+  }
+});
+
+document.getElementById("btn-import-cfg").addEventListener("click", async () => {
+  $stats.textContent = "导入中…（WebDAV 源将同步镜像）";
+  try {
+    cfg = await invoke("import_config");
+    applyPin();
+    renderRootsEditor();
+    renderRootChips();
+    renderGitList();
+    renderDavList();
+    renderPresetSelect();
+    renderPresetChips();
+    renderStats();
+    $stats.textContent = "配置已导入（含源列表；WebDAV 凭据失败项见同步页红标）";
+  } catch (err) {
+    if (String(err).includes("已取消")) {
+      $stats.textContent = "就绪";
+    } else {
+      $stats.textContent = "导入失败: " + err;
+    }
+  }
+});
+
 /* 选择并添加目录（追加语义，多库混检） */
 document.getElementById("btn-pick").addEventListener("click", async () => {
   $stats.textContent = "扫描中…";
