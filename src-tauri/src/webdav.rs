@@ -217,10 +217,15 @@ pub fn url_decode(s: &str) -> String {
 /// 递归枚举远端目录树（Depth:1 分层遍历，兼容性优于 infinity）
 pub fn list_remote(base_url: &str, username: &str, password: &str) -> Result<Vec<RemoteFile>, String> {
     let auth = format!("{username}:{password}");
+    // origin = scheme://host:port；base_path = 集合路径（如 /dav）
+    let trimmed = base_url.trim_end_matches('/');
+    let origin_end = trimmed.find("://").map(|p| trimmed[p + 3..].find('/').map(|q| p + 3 + q)).flatten().unwrap_or(trimmed.len());
+    let origin = trimmed[..origin_end].to_string();
+    let base_path = trimmed[origin_end..].to_string();
+
     let mut out: Vec<RemoteFile> = Vec::new();
-    // 待遍历的绝对 URL 队列（URL 形态，尾斜杠）
-    let mut queue: Vec<String> = vec![base_url.trim_end_matches('/').to_string() + "/"];
-    let base_norm = base_url.trim_end_matches('/').to_lowercase() + "/";
+    let mut queue: Vec<String> = vec![trimmed.to_string() + "/"];
+    let base_prefix = format!("{origin}{base_path}").to_lowercase();
     let mut visited = 0usize;
     while let Some(dir_url) = queue.pop() {
         visited += 1;
@@ -228,34 +233,37 @@ pub fn list_remote(base_url: &str, username: &str, password: &str) -> Result<Vec
             return Err("目录层级过深或条目过多（>2000），已中止".into());
         }
         let (dirs, files) = propfind_level(&auth, &dir_url, "1")?;
-        for d in dirs {
-            let du = d.trim_end_matches('/');
-            // 只遍历 base 之下的目录（绝对 href 或相对 href 都归一为绝对 URL）
-            let abs = if du.to_lowercase().starts_with("http") {
-                du.to_string()
+        // href 归一为绝对 URL：WebDAV 规范返回以 / 开头的绝对路径（已含集合前缀）
+        let normalize = |href: &str| -> Option<String> {
+            let h = href.trim_end_matches('/');
+            if h.to_lowercase().starts_with("http") {
+                return Some(h.to_string());
+            }
+            let decoded = url_decode(h);
+            if decoded.starts_with('/') {
+                Some(origin.clone() + &decoded)
             } else {
-                // 相对 href：基于 dir_url 拼接（href 可能 URL 编码）
-                format!("{}/{}", dir_url.trim_end_matches('/'), url_decode(du.trim_start_matches('/')))
-            };
-            let abs_norm = abs.trim_end_matches('/').to_lowercase();
-            if !abs_norm.starts_with(&base_norm) || abs_norm == base_norm.trim_end_matches('/').to_string() {
+                Some(format!("{}/{}", dir_url.trim_end_matches('/'), decoded))
+            }
+        };
+        for d in &dirs {
+            let Some(abs) = normalize(d) else { continue };
+            let abs_norm = abs.to_lowercase();
+            if abs_norm == base_prefix || !abs_norm.starts_with(&base_prefix) {
                 continue;
             }
-            queue.push(abs.trim_end_matches('/').to_string() + "/");
+            queue.push(abs + "/");
         }
-        for f in files {
-            let href = f.rel.trim_end_matches('/');
-            let abs = if href.to_lowercase().starts_with("http") {
-                href.to_string()
-            } else {
-                format!("{}/{}", dir_url.trim_end_matches('/'), url_decode(href.trim_start_matches('/')))
-            };
-            let abs_norm = abs.trim_end_matches('/').to_lowercase();
-            if !abs_norm.starts_with(&base_norm) {
+        for f in &files {
+            let Some(abs) = normalize(&f.rel) else { continue };
+            let abs_norm = abs.to_lowercase();
+            if !abs_norm.starts_with(&base_prefix) || abs_norm == base_prefix {
                 continue;
             }
-            let rel = url_decode(&abs[base_url.trim_end_matches('/').len()..].trim_start_matches('/'));
-            if rel.is_empty() || rel.split('/').any(|seg| seg == ".." || seg.is_empty() && false) {
+            let rel = abs[origin.len() + base_path.len()..]
+                .trim_start_matches('/')
+                .to_string();
+            if rel.is_empty() || rel.split('/').any(|seg| seg == "..") {
                 continue;
             }
             out.push(RemoteFile { rel, size: f.size, mtime: f.mtime });
