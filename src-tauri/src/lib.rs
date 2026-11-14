@@ -1522,6 +1522,12 @@ fn save_mirror(app: &AppHandle, name: &str, state_map: &webdav::MirrorState) {
     }
 }
 
+/// 读取源的明文凭据（兼容旧明文与新 DPAPI 密文）
+fn webdav_credentials(src: &config::WebdavSource) -> Result<(String, String), String> {
+    let password = webdav::dpapi_decrypt(&src.password)?;
+    Ok((src.username.clone(), password))
+}
+
 fn webdav_record_error(app: &AppHandle, name: &str, err: &str) {
     let state: State<AppState> = app.state();
     let mut cfg = state.cfg.lock().expect("cfg lock");
@@ -1554,7 +1560,8 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
             .iter()
             .find(|s| s.name == name)
             .ok_or_else(|| format!("源不存在: {name}"))?;
-        (src.url.clone(), src.username.clone(), src.password.clone())
+        let (u, p) = webdav_credentials(src)?;
+        (src.url.clone(), u, p)
     };
     let state: State<AppState> = app.state();
     let _guard = state.webdav_lock.lock().expect("webdav lock");
@@ -1571,6 +1578,7 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
 
     let mut downloaded = 0usize;
     let mut deleted = 0usize;
+    let total = to_download.len();
     for (rf, local) in &to_download {
         if let Some(parent) = local.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -1578,6 +1586,11 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
         let file_url = format!("{}/{}", url.trim_end_matches('/'), rf.rel);
         webdav::download(&file_url, &username, &password, local)?;
         downloaded += 1;
+        // 同步进度实时反馈
+        let _ = app.emit(
+            "dav-progress",
+            serde_json::json!({ "name": name, "done": downloaded, "total": total }),
+        );
     }
     for rel in &to_delete {
         let local = local_root.join(rel.replace('/', "\\"));
@@ -1745,13 +1758,15 @@ fn webdav_add_blocking(
     let mirror: webdav::MirrorState = remote.iter().map(|r| (r.rel.clone(), r.clone())).collect();
     save_mirror(app, &name, &mirror);
 
-    // 同步成功：写入配置 + 注册知识根
+    // 同步成功：写入配置 + 注册知识根（密码 DPAPI 加密后落盘）
+    let stored_password = webdav::dpapi_encrypt(&password)
+        .map_err(|e| format!("凭据加密失败: {e}"))?;
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
     cfg.webdav_sources.push(config::WebdavSource {
         name: name.clone(),
         url: url.clone(),
         username: username.trim().to_string(),
-        password: password.to_string(),
+        password: stored_password,
         enabled: true,
         interval_min,
         last_sync: gitsync::now_secs(),

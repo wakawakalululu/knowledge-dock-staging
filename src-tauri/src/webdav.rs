@@ -310,6 +310,69 @@ pub fn wait_hint() -> Duration {
     Duration::from_secs(MIN_INTERVAL_SECS)
 }
 
+// ---------------- DPAPI 凭据加密 ----------------
+
+/// 加密标记前缀（config 中的 password 形态）
+pub const DPAPI_PREFIX: &str = "dpapi:";
+
+fn run_powershell(script: &str) -> Result<String, String> {
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .map_err(|e| format!("无法执行 powershell: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(format!(
+            "powershell 失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim().chars().take(150).collect::<String>()
+        ))
+    }
+}
+
+/// DPAPI（CurrentUser）加密：返回 "dpapi:<base64>"；明文经 stdin 传入避免转义问题
+pub fn dpapi_encrypt(plain: &str) -> Result<String, String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command",
+            "Add-Type -AssemblyName System.Security;\
+             $s=[Console]::In.ReadToEnd();\
+             $b=[Text.Encoding]::UTF8.GetBytes($s);\
+             $p=[Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);\
+             [Convert]::ToBase64String($p)"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法执行 powershell: {e}"))?;
+    child.stdin.as_mut().unwrap().write_all(plain.as_bytes())?;
+    child.stdin.as_mut().unwrap().flush()?;
+    drop(child.stdin.take());
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "DPAPI 加密失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim().chars().take(150).collect::<String>()
+        ));
+    }
+    let cipher = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Ok(format!("{DPAPI_PREFIX}{cipher}"))
+}
+
+/// DPAPI 解密："dpapi:<base64>" → 明文；无前缀 = 旧版明文直接返回
+pub fn dpapi_decrypt(stored: &str) -> Result<String, String> {
+    let Some(cipher) = stored.strip_prefix(DPAPI_PREFIX) else {
+        return Ok(stored.to_string());
+    };
+    let script = format!(
+        "Add-Type -AssemblyName System.Security;\
+         $b=[Convert]::FromBase64String('{cipher}');\
+         $p=[Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);\
+         [Text.Encoding]::UTF8.GetString($p)"
+    );
+    run_powershell(&script)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

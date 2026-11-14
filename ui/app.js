@@ -1208,6 +1208,12 @@ listen("index-updated", (ev) => {
   if ($q.value.trim()) doSearch();
 });
 
+/* WebDAV 同步进度（下载 n/m 实时显示） */
+listen("dav-progress", (ev) => {
+  const p = ev.payload;
+  $stats.textContent = `同步 ${p.name}: ${p.done}/${p.total}`;
+});
+
 /* 后端唤起（快捷键/二次启动/托盘）→ 复位为折叠形态 */
 listen("ui-reset", () => {
   $q.value = "";
