@@ -104,10 +104,17 @@ fn start_watchers(app: &AppHandle) {
         Ok(w) => w,
         Err(_) => return,
     };
+    // 单根失败容错：某根不可监听只跳过该根，不能放弃其余根
+    let mut watched_any = false;
     for spec in &roots {
-        if watcher.watch(&spec.path, RecursiveMode::Recursive).is_err() {
-            return;
+        if watcher.watch(&spec.path, RecursiveMode::Recursive).is_ok() {
+            watched_any = true;
+        } else {
+            eprintln!("[watcher] 跳过不可监听的知识库根: {}", spec.path.display());
         }
+    }
+    if !watched_any {
+        return;
     }
 
     // 泵线程：静默 900ms 后触发多根增量同步

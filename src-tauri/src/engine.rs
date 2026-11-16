@@ -383,6 +383,9 @@ impl Engine {
             max_age_days: scope.max_age_days,
         };
         let mut plan: Vec<(indexer::FilePlan, String)> = Vec::new();
+        // 单根失败容错：某根不可扫（路径损坏/拔盘/无权限）只跳过该根，
+        // 不能中断其余根（曾因 ? 使单坏根拖垮全部索引与搜索）
+        let mut failed_roots: Vec<String> = Vec::new();
         for spec in roots {
             // 每库独立范围：排除规则与全局合并；扩展名/大小上限非空时覆盖全局
             let mut opts = base_opts.clone();
@@ -393,7 +396,13 @@ impl Engine {
             if spec.max_file_kb > 0 {
                 opts.max_file_bytes = spec.max_file_kb * 1024;
             }
-            let ps = indexer::scan_index_plan(&spec.path, &opts)?;
+            let ps = match indexer::scan_index_plan(&spec.path, &opts) {
+                Ok(ps) => ps,
+                Err(e) => {
+                    failed_roots.push(format!("{}: {e}", spec.label));
+                    continue;
+                }
+            };
             for p in ps {
                 let rel = if multi {
                     format!("{}/{}", spec.label, p.rel)
@@ -402,6 +411,9 @@ impl Engine {
                 };
                 plan.push((indexer::FilePlan { rel, ..p }, spec.label.clone()));
             }
+        }
+        for f in &failed_roots {
+            eprintln!("[engine] 跳过不可扫的知识库根: {f}");
         }
 
         let manifest_path = self.index_dir.join("manifest.json");

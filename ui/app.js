@@ -1263,6 +1263,12 @@ listen("dav-progress", (ev) => {
   $stats.textContent = `同步 ${p.name}: ${p.done}/${p.total}`;
 });
 
+/* 索引错误（同步失败/根不可扫）→ 状态栏明示，不再静默 */
+listen("index-error", (ev) => {
+  const msg = typeof ev.payload === "string" ? ev.payload : JSON.stringify(ev.payload);
+  $stats.textContent = "索引失败: " + msg.slice(0, 120);
+});
+
 /* 后端唤起（快捷键/二次启动/托盘）→ 复位为折叠形态 */
 listen("ui-reset", () => {
   $q.value = "";
@@ -1303,6 +1309,8 @@ listen("ui-reset", () => {
       $stats.textContent = "请先在设置中添加知识库目录";
       openSettings();
     } else {
+      // 不再静默：启动扫描失败要可见，提示去健康检查
+      $stats.textContent = "索引未就绪: " + String(e).slice(0, 100) + "（可在设置→范围→检查配置 修复）";
       console.error(e);
     }
   }
