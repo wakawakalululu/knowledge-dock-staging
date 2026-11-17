@@ -3,6 +3,8 @@ name = "knowledge-dock"
 version = "0.8.21"
 description = "uTools 风格的本地知识库悬浮检索工具"
 edition = "2021"
+# 存在额外 bin（sync_diag 诊断工具）时，tauri build 需显式主二进制
+default-run = "knowledge-dock"
 
 [lib]
 name = "knowledge_dock_lib"
