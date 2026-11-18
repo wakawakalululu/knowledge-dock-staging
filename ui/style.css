@@ -742,3 +742,11 @@ html, body {
 }
 .cfg-alert[hidden] { display: none; }
 .cfg-alert:hover { filter: brightness(0.92); }
+
+/* 无限滚动提示 */
+.load-more-hint {
+  text-align: center;
+  padding: 6px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+}

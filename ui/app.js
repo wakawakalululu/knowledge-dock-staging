@@ -57,6 +57,7 @@ let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下
 let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
+let loadingMore = false;  // 无限滚动防重入
 let activePreset = null;  // 当前生效的范围预设（快捷 chips 高亮；手动保存设置后清除）
 let sortMode = "rel";     // 结果显示：rel 相关度 | mtime 最近修改 | group 按库分组
 let searchSeq = 0;        // 搜索请求序号：过期响应丢弃（快速输入竞态守卫）
@@ -345,15 +346,16 @@ function render(query) {
     ? `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode}`
     : "";
   // 上下文展开按钮（阻止冒泡，不触发打开文件）
-  // 加载更多按钮
-  const moreBtn = $resList.querySelector(".load-more-btn");
-  if (moreBtn) {
-    moreBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      searchLimit += 50;
-      doSearch();
-    });
-  }
+  // 无限滚动：结果列表滚动到底部附近自动追加下一批（替代手动按钮）
+  $resList.addEventListener("scroll", () => {
+    const el = $resList;
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 150) return;
+    if (loadingMore) return;
+    if (hits.length < searchLimit) return; // 已全部加载
+    loadingMore = true;
+    searchLimit += 50;
+    doSearch().finally(() => { loadingMore = false; });
+  });
   $resList.querySelectorAll(".ctx-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -516,14 +518,12 @@ async function doSearch() {
   if (r.duration_ms) {
     $resCount.textContent = `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode} · ${r.duration_ms}ms`;
   }
-  // If we got exactly the limit, there might be more results
+  // 返回满页说明可能还有更多结果 → 底部显示"滚动加载"提示（替代手动按钮）
   if (hits.length >= searchLimit) {
-    const btn = document.createElement("button");
-    btn.className = "load-more-btn";
-    btn.textContent = "加载更多…";
-    btn.style.cssText = "display:block;width:100%;padding:8px;border:none;background:var(--btn-bg);color:var(--accent);cursor:pointer;font-size:12px;border-radius:6px;margin-top:4px;";
-    btn.addEventListener("click", () => { searchLimit += 50; doSearch(); });
-    $resList.appendChild(btn);
+    const hint = document.createElement("div");
+    hint.className = "load-more-hint";
+    hint.textContent = "↓ 继续滚动加载更多…";
+    $resList.appendChild(hint);
   }
   recordSearch(parsed.q);
 }
@@ -1394,6 +1394,25 @@ listen("ui-reset", () => {
   $q.focus();
   // 静默巡检配置（error 级问题显示在状态栏，可点击修复）
   healthPatrol();
+  // 诊断钩子（临时）：直接渲染导入预览面板验证前端流程
+  if (new URLSearchParams(location.search).get("previewhook") === "1") {
+    setTimeout(() => {
+      openSettings();
+      activateTab("general");
+      renderImportPreview({
+        path: "C:/Users/Admin/AppData/Local/Temp/imp-test.json",
+        summary: [
+          "新增知识库根 1 个：docs-extra",
+          "排除规则：0 条 → 2 条",
+          "单文件上限：4096 KB → 2048 KB",
+          "范围预设：2 个 → 3 个",
+          "快捷键：Alt+Space → Alt+Shift+Space",
+          "窗口宽度：600 → 720 px",
+        ],
+        warnings: ["WebDAV 密码为 DPAPI 加密且绑定本机：跨机导入后可能需重新填写密码（同步页会以红标提示失败项）"],
+      });
+    }, 300);
+  }
   // 通知主进程：前端就绪，可以显示窗口（避免 webview 未加载完的黑屏/闪块）
   invoke("frontend_ready").catch(() => {});
 })();
