@@ -875,6 +875,7 @@ if ($healthResult && $btnHealthFix) {
       renderRootChips();
       renderPresetChips();
       renderStats();
+      healthPatrol();
     } catch (e) {
       renderHealth(null, [String(e)]);
     }
@@ -1113,6 +1114,7 @@ document.getElementById("btn-import-cfg").addEventListener("click", async () => 
     renderPresetSelect();
     renderPresetChips();
     renderStats();
+    healthPatrol();
     $stats.textContent = "配置已导入（含源列表；WebDAV 凭据失败项见同步页红标）";
   } catch (err) {
     if (String(err).includes("已取消")) {
@@ -1185,6 +1187,7 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     // 3. 范围可能变化：重新同步 + 宽度立即生效
     const s = await invoke("rescan");
     $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    healthPatrol();
     expanded = !expanded;
     setExpanded(!expanded);
     closeSettings();
@@ -1244,6 +1247,39 @@ $rootsList.addEventListener("click", (e) => {
   renderRootsEditor();
   renderRootChips();
 });
+
+/* 配置健康巡检：启动/导入/修复后静默检查，error 级问题在状态栏红字提示（点击进设置修复） */
+async function healthPatrol() {
+  try {
+    const issues = await invoke("health_check");
+    const errs = (issues || []).filter((it) => it.severity === "error");
+    if (!errs.length) {
+      // 之前的警示自动消除（仅在仍显示警示文案时复位，避免覆盖其他状态提示）
+      if ($stats.dataset.alert === "1") {
+        delete $stats.dataset.alert;
+        $stats.classList.remove("stat-alert");
+        $stats.onclick = null;
+        $stats.title = "";
+        if ($stats.textContent.startsWith("配置异常")) $stats.textContent = "就绪";
+      }
+      return;
+    }
+    $stats.dataset.alert = "1";
+    $stats.classList.add("stat-alert");
+    $stats.title = errs.map((e) => "• " + e.message).join("\n");
+    $stats.textContent = `配置异常 ${errs.length} 项（点击修复）`;
+    $stats.onclick = () => {
+      openSettings();
+      activateTab("scope");
+      setTimeout(() => {
+        const b = document.getElementById("btn-health");
+        if (b) b.click();
+      }, 120);
+    };
+  } catch (_) {
+    /* 巡检失败不影响正常使用 */
+  }
+}
 
 /* 索引变更（文件监听触发）→ 统计即时刷新；重搜 trailing 防抖 1.5s
    （大库连续变更时 watcher 每轮都 emit，避免搜索风暴） */
@@ -1315,6 +1351,8 @@ listen("ui-reset", () => {
     }
   }
   $q.focus();
+  // 静默巡检配置（error 级问题显示在状态栏，可点击修复）
+  healthPatrol();
   // 通知主进程：前端就绪，可以显示窗口（避免 webview 未加载完的黑屏/闪块）
   invoke("frontend_ready").catch(() => {});
 })();
