@@ -1185,9 +1185,43 @@ fn export_config(app: AppHandle, state: State<'_, AppState>) -> Result<String, S
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 从用户选择的 JSON 文件导入配置（含快捷键换绑 + 多根重建）
+/// 从用户选择的 JSON 文件导入配置（直接应用；前端 dry-run 走 preview/apply 两步）
 #[tauri::command]
 fn import_config(app: AppHandle, state: State<'_, AppState>) -> Result<Config, String> {
+    let Some(path) = pick_config_file(&app, &state)? else {
+        return Err("已取消".into());
+    };
+    apply_import_path(&app, &state, &path)
+}
+
+/// 配置导入 dry-run：选文件并计算与当前配置的差异，不应用
+#[derive(Serialize)]
+struct ImportPreview {
+    /// 已选文件路径（确认导入时回传给 apply_import_config）
+    path: String,
+    summary: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[tauri::command]
+fn preview_import_config(app: AppHandle, state: State<'_, AppState>) -> Result<ImportPreview, String> {
+    let Some(path) = pick_config_file(&app, &state)? else {
+        return Err("已取消".into());
+    };
+    let incoming = read_config_file(&path)?;
+    let current = state.cfg.lock().expect("cfg lock").clone();
+    let (summary, warnings) = diff_configs(&current, &incoming);
+    Ok(ImportPreview { path, summary, warnings })
+}
+
+/// 应用已预览过的配置（不重新弹对话框）
+#[tauri::command]
+fn apply_import_config(app: AppHandle, path: String, state: State<'_, AppState>) -> Result<Config, String> {
+    apply_import_path(&app, &state, &path)
+}
+
+/// 弹出 JSON 选择对话框；返回 None 表示用户取消
+fn pick_config_file(app: &AppHandle, state: &State<'_, AppState>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     state.dialog_open.store(true, Ordering::SeqCst);
     let (tx, rx) = std::sync::mpsc::channel::<Option<tauri_plugin_dialog::FilePath>>();
@@ -1197,27 +1231,180 @@ fn import_config(app: AppHandle, state: State<'_, AppState>) -> Result<Config, S
     let picked = rx.recv().map_err(|e| e.to_string());
     state.dialog_open.store(false, Ordering::SeqCst);
     let picked = picked?;
-    let Some(fp) = picked else { return Err("已取消".into()) };
-    let Some(path) = fp.as_path() else { return Err("路径无效".into()) };
+    let Some(fp) = picked else { return Ok(None) };
+    let Some(path) = fp.as_path() else {
+        return Err("路径无效".into());
+    };
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
+fn read_config_file(path: &str) -> Result<Config, String> {
     let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let cfg: Config = serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))?;
-    apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
+    serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))
+}
+
+/// 应用导入：解析 → 快捷键换绑 → 落盘 → 同步索引/监听 → WebDAV 重建镜像
+fn apply_import_path(app: &AppHandle, state: &State<'_, AppState>, path: &str) -> Result<Config, String> {
+    let cfg = read_config_file(path)?;
+    apply_shortcut(app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
-    config::save(&app, &cfg);
+    config::save(app, &cfg);
     let roots = cfg.root_specs();
     if !roots.is_empty() {
         let scope = cfg.scope.clone();
         let _ = state.engine.sync_roots(&roots, &scope);
-        start_watchers(&app);
+        start_watchers(app);
     }
-    // WebDAV 源：导入后立即验证凭据并重建镜像（跨机导入的 DPAPI 密文
+    // WebDAV 源：导入后立即验证凭据并重建镜像（跨机导入的密文
     // 解不开 → last_error 标记提示重新填写密码）
     for s in &cfg.webdav_sources {
-        if let Err(e) = webdav_sync_one(&app, &s.name) {
-            webdav_record_error(&app, &s.name, &e);
+        if let Err(e) = webdav_sync_one(app, &s.name) {
+            webdav_record_error(app, &s.name, &e);
         }
     }
-    Ok(cfg)
+    let cfg_out = state.cfg.lock().expect("cfg lock").clone();
+    Ok(cfg_out)
+}
+
+fn norm_path_key(p: &str) -> String {
+    p.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// 计算两份配置的差异摘要（dry-run 预览用）
+pub fn diff_configs(cur: &Config, next: &Config) -> (Vec<String>, Vec<String>) {
+    use std::collections::{HashMap, HashSet};
+    let mut summary: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    // 知识库根
+    let cur_roots: HashMap<String, &scope::KnowledgeRoot> =
+        cur.roots.iter().map(|r| (norm_path_key(&r.path), r)).collect();
+    let next_roots: HashMap<String, &scope::KnowledgeRoot> =
+        next.roots.iter().map(|r| (norm_path_key(&r.path), r)).collect();
+    let mut added: Vec<String> = next_roots
+        .iter()
+        .filter(|(k, _)| !cur_roots.contains_key(*k))
+        .map(|(_, r)| r.label.clone())
+        .collect();
+    let mut removed: Vec<String> = cur_roots
+        .iter()
+        .filter(|(k, _)| !next_roots.contains_key(*k))
+        .map(|(_, r)| r.label.clone())
+        .collect();
+    added.sort();
+    removed.sort();
+    if !added.is_empty() {
+        summary.push(format!("新增知识库根 {} 个：{}", added.len(), added.join("、")));
+    }
+    if !removed.is_empty() {
+        summary.push(format!("移除知识库根 {} 个：{}", removed.len(), removed.join("、")));
+    }
+    let mut toggled = 0usize;
+    for (k, r) in &next_roots {
+        if let Some(c) = cur_roots.get(k) {
+            if c.enabled != r.enabled {
+                toggled += 1;
+            }
+        }
+    }
+    if toggled > 0 {
+        summary.push(format!("{toggled} 个知识库根启用状态变化"));
+    }
+
+    // 范围规则
+    let key_set = |v: &[String]| -> HashSet<String> {
+        v.iter().map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty()).collect()
+    };
+    let join_set = |s: &HashSet<String>| -> String {
+        let mut v: Vec<&String> = s.iter().collect();
+        v.sort();
+        v.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", ")
+    };
+    let cur_ext = key_set(&cur.scope.include_exts);
+    let next_ext = key_set(&next.scope.include_exts);
+    if cur_ext != next_ext {
+        summary.push(format!("扩展名：[{}] → [{}]", join_set(&cur_ext), join_set(&next_ext)));
+    }
+    if cur.scope.exclude_globs != next.scope.exclude_globs {
+        summary.push(format!(
+            "排除规则：{} 条 → {} 条",
+            cur.scope.exclude_globs.len(),
+            next.scope.exclude_globs.len()
+        ));
+    }
+    if cur.scope.include_globs != next.scope.include_globs {
+        summary.push(format!(
+            "包含白名单：{} 条 → {} 条",
+            cur.scope.include_globs.len(),
+            next.scope.include_globs.len()
+        ));
+    }
+    if cur.scope.max_file_kb != next.scope.max_file_kb {
+        summary.push(format!(
+            "单文件上限：{} KB → {} KB",
+            cur.scope.max_file_kb, next.scope.max_file_kb
+        ));
+    }
+    if cur.scope.max_age_days != next.scope.max_age_days {
+        let fmt = |d: u64| if d == 0 { "不限".to_string() } else { format!("{d} 天") };
+        summary.push(format!(
+            "时间窗：{} → {}",
+            fmt(cur.scope.max_age_days),
+            fmt(next.scope.max_age_days)
+        ));
+    }
+
+    // 数据源
+    let cur_git: HashSet<String> = cur.git_sources.iter().map(|s| s.name.clone()).collect();
+    let next_git: HashSet<String> = next.git_sources.iter().map(|s| s.name.clone()).collect();
+    if cur_git != next_git {
+        summary.push(format!("Git 源：{} 个 → {} 个", cur_git.len(), next_git.len()));
+    }
+    let cur_dav: HashSet<String> = cur.webdav_sources.iter().map(|s| s.name.clone()).collect();
+    let next_dav: HashSet<String> = next.webdav_sources.iter().map(|s| s.name.clone()).collect();
+    if cur_dav != next_dav {
+        summary.push(format!("WebDAV 源：{} 个 → {} 个", cur_dav.len(), next_dav.len()));
+    }
+
+    // 预设
+    if cur.presets.len() != next.presets.len() {
+        summary.push(format!(
+            "范围预设：{} 个 → {} 个",
+            cur.presets.len(),
+            next.presets.len()
+        ));
+    }
+
+    // 通用
+    if cur.shortcut != next.shortcut {
+        summary.push(format!("快捷键：{} → {}", cur.shortcut, next.shortcut));
+    }
+    if (cur.width - next.width).abs() > 0.5 {
+        summary.push(format!("窗口宽度：{} → {} px", cur.width, next.width));
+    }
+    if cur.pin_mode != next.pin_mode {
+        summary.push(format!(
+            "钉住模式：{} → {}",
+            if cur.pin_mode { "开" } else { "关" },
+            if next.pin_mode { "开" } else { "关" }
+        ));
+    }
+
+    // 警告
+    let dav_encrypted = next
+        .webdav_sources
+        .iter()
+        .any(|s| s.password.starts_with(webdav::DPAPI_PREFIX));
+    if dav_encrypted {
+        warnings.push(
+            "WebDAV 密码为 DPAPI 加密且绑定本机：跨机导入后可能需重新填写密码（同步页会以红标提示失败项）"
+                .into(),
+        );
+    }
+    if summary.is_empty() {
+        summary.push("配置内容与当前一致（导入不会改变任何设置）".into());
+    }
+    (summary, warnings)
 }
 
 /// 就地展开上下文：读取源文件命中块前 N 行 + 后 M 行（不打开源文件）
@@ -2044,6 +2231,8 @@ pub fn run() {
             list_scope_presets,
             export_config,
             import_config,
+            preview_import_config,
+            apply_import_config,
             open_file,
             reveal_file,
             hide_window,

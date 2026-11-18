@@ -1111,25 +1111,60 @@ document.getElementById("btn-export-cfg").addEventListener("click", async () => 
   }
 });
 
+/* 配置导入：先 dry-run 预览差异，确认后才应用 */
+function renderImportPreview(p) {
+  const $box = document.getElementById("import-preview");
+  if (!$box) return;
+  $box.hidden = false;
+  const lines = (p.summary || [])
+    .map((t) => `<div class="diag-line ok">• ${escapeHtml(t)}</div>`)
+    .join("");
+  const warns = (p.warnings || [])
+    .map((t) => `<div class="diag-line warn-line">! ${escapeHtml(t)}</div>`)
+    .join("");
+  $box.innerHTML = `
+    <div class="diag-line final">导入预览（确认后才应用；取消无副作用）</div>
+    ${lines}${warns}
+    <div class="set-row" style="margin-top:6px">
+      <button id="btn-import-confirm" class="mini-btn">确认导入</button>
+      <button id="btn-import-cancel" class="mini-btn">取消</button>
+    </div>`;
+  document.getElementById("btn-import-cancel").onclick = () => {
+    $box.hidden = true;
+    $stats.textContent = "已取消导入";
+  };
+  document.getElementById("btn-import-confirm").onclick = async () => {
+    $stats.textContent = "导入中…（WebDAV 源将重建镜像）";
+    try {
+      cfg = await invoke("apply_import_config", { path: p.path });
+      applyPin();
+      renderRootsEditor();
+      renderRootChips();
+      renderGitList();
+      renderDavList();
+      renderPresetSelect();
+      renderPresetChips();
+      renderStats();
+      healthPatrol();
+      $box.hidden = true;
+      $stats.textContent = "配置已导入（含源列表；WebDAV 凭据失败项见同步页红标）";
+    } catch (err) {
+      $stats.textContent = "导入失败: " + err;
+    }
+  };
+}
+
 document.getElementById("btn-import-cfg").addEventListener("click", async () => {
-  $stats.textContent = "导入中…（WebDAV 源将同步镜像）";
+  $stats.textContent = "读取配置…";
   try {
-    cfg = await invoke("import_config");
-    applyPin();
-    renderRootsEditor();
-    renderRootChips();
-    renderGitList();
-    renderDavList();
-    renderPresetSelect();
-    renderPresetChips();
-    renderStats();
-    healthPatrol();
-    $stats.textContent = "配置已导入（含源列表；WebDAV 凭据失败项见同步页红标）";
+    const p = await invoke("preview_import_config");
+    $stats.textContent = "预览如下，确认后导入";
+    renderImportPreview(p);
   } catch (err) {
     if (String(err).includes("已取消")) {
       $stats.textContent = "就绪";
     } else {
-      $stats.textContent = "导入失败: " + err;
+      $stats.textContent = "读取失败: " + err;
     }
   }
 });
