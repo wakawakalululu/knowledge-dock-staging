@@ -247,7 +247,7 @@ async function applyPreset(name) {
     $setExts.value = (cfg.scope.include_exts || ["md","markdown","txt"]).join(", ");
     $setMaxkb.value = cfg.scope.max_file_kb || 4096;
     const s = await invoke("rescan");
-    $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    $stats.textContent = fmtStats(s);
     doSearch();
   } catch (e) {
     $stats.textContent = "加载预设失败: " + e;
@@ -591,6 +591,15 @@ function relTime(ts) {
   if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
   if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
   return Math.floor(diff / 86400) + " 天前";
+}
+
+/** 同步结果文案：文档/块数 + 本次耗时/更新/删除（零指标省略） */
+function fmtStats(st) {
+  const parts = [`${st.docs} 个文档 · ${st.chunks} 个知识块`];
+  if (st.duration_ms) parts.push(`${st.duration_ms}ms`);
+  if (st.updated) parts.push(`更新 ${st.updated}`);
+  if (st.removed) parts.push(`删除 ${st.removed}`);
+  return parts.join(" · ");
 }
 
 function renderGitList() {
@@ -1135,7 +1144,7 @@ document.getElementById("btn-pick").addEventListener("click", async () => {
     cfg = await invoke("get_config");
     renderRootsEditor();
     renderRootChips();
-    if (r.stats) $stats.textContent = `${r.stats.docs} 个文档 · ${r.stats.chunks} 个知识块`;
+    if (r.stats) $stats.textContent = fmtStats(r.stats);
   } else {
     $stats.textContent = "就绪";
   }
@@ -1146,7 +1155,7 @@ if ($btnRescan) $btnRescan.addEventListener("click", async () => {
   $stats.textContent = "扫描中…";
   try {
     const s = await invoke("rescan");
-    $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    $stats.textContent = fmtStats(s);
     renderStats();
   } catch (e) {
     $stats.textContent = "扫描失败: " + e;
@@ -1186,7 +1195,7 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     renderPresetChips();
     // 3. 范围可能变化：重新同步 + 宽度立即生效
     const s = await invoke("rescan");
-    $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    $stats.textContent = fmtStats(s);
     healthPatrol();
     expanded = !expanded;
     setExpanded(!expanded);
@@ -1282,7 +1291,7 @@ async function healthPatrol() {
    （大库连续变更时 watcher 每轮都 emit，避免搜索风暴） */
 listen("index-updated", (ev) => {
   const s = ev.payload;
-  $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+  $stats.textContent = fmtStats(s);
   if (!$q.value.trim()) return;
   clearTimeout(indexBounceTimer);
   indexBounceTimer = setTimeout(() => {
@@ -1336,7 +1345,7 @@ listen("ui-reset", () => {
     renderPresetChips();
     await loadHistory();
     const s = await invoke("rescan");
-    $stats.textContent = `${s.docs} 个文档 · ${s.chunks} 个知识块`;
+    $stats.textContent = fmtStats(s);
   } catch (e) {
     if (String(e).includes("尚未设置")) {
       $stats.textContent = "请先在设置中添加知识库目录";

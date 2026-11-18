@@ -367,8 +367,9 @@ impl Engine {
     /// **仅重读重切变更文件**（大库免全量重扫）；多根时展示路径带库名前缀
     /// roots: (路径, 显示名)；scope: 范围规则
     pub fn sync_roots(&self, roots: &[crate::scope::RootSpec], scope: &ScopeConfig) -> Result<Stats, String> {
+        let started = std::time::Instant::now();
         if roots.is_empty() {
-            return Ok(Stats { docs: 0, chunks: 0 });
+            return Ok(Stats::default());
         }
         let multi = roots.len() > 1;
         let base_opts = indexer::PlanOptions {
@@ -470,6 +471,9 @@ impl Engine {
         let stats = Stats {
             docs: new_manifest.len(),
             chunks: new_manifest.values().map(|m| m[1] as usize).sum(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            updated: touched.len(),
+            removed: removed.len(),
         };
         *manifest = new_manifest;
         let _ = std::fs::write(
@@ -513,7 +517,7 @@ impl Engine {
     pub fn stats(&self) -> Stats {
         let manifest = self.manifest.lock().expect("manifest lock");
         let chunks: u64 = manifest.values().map(|m| m[1]).sum();
-        Stats { docs: manifest.len(), chunks: chunks as usize }
+        Stats { docs: manifest.len(), chunks: chunks as usize, ..Default::default() }
     }
 
     /// 索引统计仪表盘：各类型/各库块数分布

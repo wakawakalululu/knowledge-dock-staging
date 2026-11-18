@@ -63,10 +63,19 @@ pub struct DocumentChunk {
     /// 块起始行号（1-based）
     pub line: usize,
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct Stats {
     pub docs: usize,
     pub chunks: usize,
+    /// 本次同步耗时（毫秒）；仅同步返回时有意义
+    #[serde(default)]
+    pub duration_ms: u64,
+    /// 本次同步重新索引的文件数（新增 + 变更）
+    #[serde(default)]
+    pub updated: usize,
+    /// 本次同步从索引移除的文件数
+    #[serde(default)]
+    pub removed: usize,
 }
 fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || IGNORE_DIRS.contains(&name)
