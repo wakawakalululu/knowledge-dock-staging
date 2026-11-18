@@ -1248,27 +1248,24 @@ $rootsList.addEventListener("click", (e) => {
   renderRootChips();
 });
 
-/* 配置健康巡检：启动/导入/修复后静默检查，error 级问题在状态栏红字提示（点击进设置修复） */
+/* 配置健康巡检：启动/导入/保存/修复后静默检查；
+   error 级问题显示为独立的警示 chip（不与 stats 状态单槽争用，避免被索引事件覆盖） */
+const $cfgAlert = document.getElementById("cfg-alert");
 async function healthPatrol() {
+  if (!$cfgAlert) return;
   try {
     const issues = await invoke("health_check");
     const errs = (issues || []).filter((it) => it.severity === "error");
     if (!errs.length) {
-      // 之前的警示自动消除（仅在仍显示警示文案时复位，避免覆盖其他状态提示）
-      if ($stats.dataset.alert === "1") {
-        delete $stats.dataset.alert;
-        $stats.classList.remove("stat-alert");
-        $stats.onclick = null;
-        $stats.title = "";
-        if ($stats.textContent.startsWith("配置异常")) $stats.textContent = "就绪";
-      }
+      $cfgAlert.hidden = true;
+      $cfgAlert.textContent = "";
+      $cfgAlert.title = "";
       return;
     }
-    $stats.dataset.alert = "1";
-    $stats.classList.add("stat-alert");
-    $stats.title = errs.map((e) => "• " + e.message).join("\n");
-    $stats.textContent = `配置异常 ${errs.length} 项（点击修复）`;
-    $stats.onclick = () => {
+    $cfgAlert.hidden = false;
+    $cfgAlert.textContent = `配置异常 ${errs.length} 项`;
+    $cfgAlert.title = errs.map((e) => "• " + e.message).join("\n") + "\n点击进入修复";
+    $cfgAlert.onclick = () => {
       openSettings();
       activateTab("scope");
       setTimeout(() => {

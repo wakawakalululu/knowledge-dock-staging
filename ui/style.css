@@ -727,10 +727,18 @@ html, body {
 .hit:hover .ctx-btn, .hit.active .ctx-btn { opacity: 1; }
 .hit .ctx-btn:hover { background: var(--accent-soft); color: var(--accent); }
 
-/* 状态栏配置异常警示（可点击进设置修复） */
-#stats.stat-alert {
-  color: var(--danger);
+
+/* 状态栏配置异常 chip（独立于 stats，避免被索引事件覆盖） */
+.cfg-alert {
+  flex: none;
+  border: none;
+  border-radius: 999px;
+  padding: 1px 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  text-decoration: underline dotted;
 }
+.cfg-alert[hidden] { display: none; }
+.cfg-alert:hover { filter: brightness(0.92); }
