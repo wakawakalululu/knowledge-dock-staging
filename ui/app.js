@@ -483,12 +483,12 @@ async function doSearch() {
     lastQuery = "";
     ctxCache = {};
     ctxOpen = {};
+    updateScopeIndicator({ rootF: "all", typeF: "all" });
     updateView();
     return;
   }
   const parsed = parseScopePrefix(raw);
   lastQuery = parsed.q;
-  updateScopeIndicator(parsed);
   updateScopeIndicator(parsed);
   const seq = ++searchSeq; // 本次请求的序号；响应到达时若已过期则丢弃
   let r;
@@ -539,6 +539,7 @@ function clearInput() {
   lastQuery = "";
   ctxCache = {};
   ctxOpen = {};
+  updateScopeIndicator({ rootF: "all", typeF: "all" });
   updateView();
 }
 
@@ -761,6 +762,13 @@ $q.addEventListener("keydown", (e) => {
 $btnClear.addEventListener("click", () => {
   clearInput();
   $q.focus();
+});
+
+/** 点击 @范围 badge：剥离前缀恢复全局搜索 */
+document.getElementById("scope-indicator").addEventListener("click", () => {
+  $q.value = $q.value.replace(/^@\S+\s*/, "");
+  $q.focus();
+  doSearch();
 });
 
 document.getElementById("btn-settings").addEventListener("click", () => {
@@ -1308,7 +1316,7 @@ function updateScopeIndicator(parsed) {
   const $ind = document.getElementById("scope-indicator");
   if (!$ind) return;
   const raw = $q.value.trim();
-  const hasScope = raw.startsWith("@") && parsed && (parsed.rootF !== "all" || parsed.typeF !== "all");
+  const hasScope = raw.startsWith("@") && parsed && parsed.hit === true;
   if (!hasScope) { $ind.hidden = true; return; }
   const scopeName = parsed.rootF !== "all" ? parsed.rootF : TYPE_LABEL[parsed.typeF] || parsed.typeF;
   $ind.hidden = false;
