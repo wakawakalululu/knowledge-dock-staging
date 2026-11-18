@@ -57,6 +57,7 @@ let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下
 let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
+const MAX_RESULTS = 500;  // 结果渲染硬上限：到顶提示细化条件，防 DOM 无限增长
 let loadingMore = false;  // 无限滚动防重入
 let activePreset = null;  // 当前生效的范围预设（快捷 chips 高亮；手动保存设置后清除）
 let sortMode = "rel";     // 结果显示：rel 相关度 | mtime 最近修改 | group 按库分组
@@ -352,6 +353,7 @@ function render(query) {
     if (el.scrollTop + el.clientHeight < el.scrollHeight - 150) return;
     if (loadingMore) return;
     if (hits.length < searchLimit) return; // 已全部加载
+    if (searchLimit >= MAX_RESULTS) return; // 已达渲染上限
     loadingMore = true;
     searchLimit += 50;
     doSearch().finally(() => { loadingMore = false; });
@@ -524,7 +526,10 @@ async function doSearch() {
   if (hits.length >= searchLimit) {
     const hint = document.createElement("div");
     hint.className = "load-more-hint";
-    hint.textContent = "↓ 继续滚动加载更多…";
+    hint.textContent =
+      searchLimit >= MAX_RESULTS
+        ? `已显示前 ${MAX_RESULTS} 条（共 ${hits.length}+），请细化关键词或用 @库名 限定范围`
+        : "↓ 继续滚动加载更多…";
     $resList.appendChild(hint);
   }
   recordSearch(parsed.q);

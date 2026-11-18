@@ -584,7 +584,7 @@ fn scope_check(path: String, state: State<'_, AppState>) -> ScopeCheckResult {
 /// 健康问题条目
 #[derive(Serialize)]
 struct HealthIssue {
-    /// duplicate_root | missing_path | bad_glob | git_source_broken | git_root_missing | bad_value
+    /// duplicate_root | missing_path | bad_glob | git_source_broken | git_root_missing | bad_value | git_sync_failed | webdav_sync_failed
     kind: String,
     /// error | warn
     severity: String,
@@ -797,6 +797,29 @@ fn health_check(app: AppHandle, state: State<'_, AppState>) -> Vec<HealthIssue> 
                 severity: "warn".into(),
                 message: format!("WebDAV 源「{}」未注册为知识根", s.name),
                 fixable: true,
+            });
+        }
+    }
+    // 8. 源同步失败巡检：最近一次同步出错（last_error 非空）→ warn（重新同步成功后自动消除）
+    for s in &cfg.git_sources {
+        if let Some(err) = &s.last_error {
+            let brief: String = err.chars().take(80).collect();
+            issues.push(HealthIssue {
+                kind: "git_sync_failed".into(),
+                severity: "warn".into(),
+                message: format!("git 源「{}」最近同步失败：{}", s.name, brief),
+                fixable: false,
+            });
+        }
+    }
+    for s in &cfg.webdav_sources {
+        if let Some(err) = &s.last_error {
+            let brief: String = err.chars().take(80).collect();
+            issues.push(HealthIssue {
+                kind: "webdav_sync_failed".into(),
+                severity: "warn".into(),
+                message: format!("WebDAV 源「{}」最近同步失败：{}", s.name, brief),
+                fixable: false,
             });
         }
     }
