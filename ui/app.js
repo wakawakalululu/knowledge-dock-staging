@@ -488,6 +488,8 @@ async function doSearch() {
   }
   const parsed = parseScopePrefix(raw);
   lastQuery = parsed.q;
+  updateScopeIndicator(parsed);
+  updateScopeIndicator(parsed);
   const seq = ++searchSeq; // 本次请求的序号；响应到达时若已过期则丢弃
   let r;
   try {
@@ -566,6 +568,10 @@ function renderRootsEditor() {
           <button class="root-del" data-del="${i}">移除</button>
         </div>
         <div class="root-detail" hidden>
+          <div class="set-row">
+            <span class="lbl">路径</span>
+            <input class="set-input mono rd-path" value="${escapeHtml(r.path)}" placeholder="知识库根目录完整路径" spellcheck="false" />
+          </div>
           <div class="set-row">
             <span class="lbl">排除</span>
             <input class="set-input mono rd-ex" value="${escapeHtml((r.root_exclude_globs || []).join(","))}" placeholder="dir/ 或 *.tmp，逗号分隔（留空用全局）" spellcheck="false" />
@@ -1260,6 +1266,8 @@ $rootsList.addEventListener("input", (e) => {
   if (e.target.dataset.k === "label") {
     r.label = e.target.value;
     renderRootChips();
+  } else if (e.target.classList.contains("rd-path")) {
+    r.path = e.target.value.trim();
   } else if (e.target.classList.contains("rd-ex")) {
     r.root_exclude_globs = e.target.value.split(/[,，\n]+/).map((s) => s.trim()).filter(Boolean);
   } else if (e.target.classList.contains("rd-ext")) {
@@ -1295,6 +1303,19 @@ $rootsList.addEventListener("click", (e) => {
 /* 配置健康巡检：启动/导入/保存/修复后静默检查；
    error 级问题显示为独立的警示 chip（不与 stats 状态单槽争用，避免被索引事件覆盖） */
 const $cfgAlert = document.getElementById("cfg-alert");
+/** @范围前缀指示器：输入含 @ 时显示已解析的范围标签（点击清除前缀） */
+function updateScopeIndicator(parsed) {
+  const $ind = document.getElementById("scope-indicator");
+  if (!$ind) return;
+  const raw = $q.value.trim();
+  const hasScope = raw.startsWith("@") && parsed && (parsed.rootF !== "all" || parsed.typeF !== "all");
+  if (!hasScope) { $ind.hidden = true; return; }
+  const scopeName = parsed.rootF !== "all" ? parsed.rootF : TYPE_LABEL[parsed.typeF] || parsed.typeF;
+  $ind.hidden = false;
+  $ind.textContent = "@" + scopeName;
+  $ind.title = "点击清除范围前缀";
+}
+
 async function healthPatrol() {
   if (!$cfgAlert) return;
   try {
@@ -1394,25 +1415,7 @@ listen("ui-reset", () => {
   $q.focus();
   // 静默巡检配置（error 级问题显示在状态栏，可点击修复）
   healthPatrol();
-  // 诊断钩子（临时）：直接渲染导入预览面板验证前端流程
-  if (new URLSearchParams(location.search).get("previewhook") === "1") {
-    setTimeout(() => {
-      openSettings();
-      activateTab("general");
-      renderImportPreview({
-        path: "C:/Users/Admin/AppData/Local/Temp/imp-test.json",
-        summary: [
-          "新增知识库根 1 个：docs-extra",
-          "排除规则：0 条 → 2 条",
-          "单文件上限：4096 KB → 2048 KB",
-          "范围预设：2 个 → 3 个",
-          "快捷键：Alt+Space → Alt+Shift+Space",
-          "窗口宽度：600 → 720 px",
-        ],
-        warnings: ["WebDAV 密码为 DPAPI 加密且绑定本机：跨机导入后可能需重新填写密码（同步页会以红标提示失败项）"],
-      });
-    }, 300);
-  }
+  updateScopeIndicator(parseScopePrefix($q.value));
   // 通知主进程：前端就绪，可以显示窗口（避免 webview 未加载完的黑屏/闪块）
   invoke("frontend_ready").catch(() => {});
 })();

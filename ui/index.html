@@ -15,7 +15,8 @@
       <span class="s-icon drag-zone" data-tauri-drag-region title="拖动移动窗口">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
       </span>
-      <input id="q" type="text" placeholder="搜索知识库，@法律/@库名 可限定范围" autocomplete="off" spellcheck="false" />
+      <span id="scope-indicator" class="scope-indicator" hidden title="点击清除范围前缀"></span>
+          <input id="q" type="text" placeholder="搜索知识库，@法律/@库名 可限定范围" autocomplete="off" spellcheck="false" />
       <button id="btn-clear" class="clear-btn" hidden title="清空">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
