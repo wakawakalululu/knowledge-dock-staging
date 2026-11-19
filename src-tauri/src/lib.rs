@@ -4,6 +4,7 @@
 //! 全局快捷键唤起/隐藏，失焦自动隐藏（钉住模式除外）。
 //! 检索：Tantivy BM25 + jieba 分词 + 持久化索引 + 同义词改写（纯离线）。
 
+pub mod ai;
 pub mod apps;
 pub mod config;
 pub mod matching;
@@ -1483,6 +1484,78 @@ fn search_apps(q: String, limit: Option<usize>, state: State<'_, AppState>) -> V
     apps::search(&q, lim, &mut cache)
 }
 
+/// AI 结果筛选：把候选段交给配置的 OpenAI 兼容模型，返回保留的编号子集
+#[tauri::command]
+async fn ai_rerank(
+    state: State<'_, AppState>,
+    q: String,
+    items: Vec<AiItem>,
+) -> Result<Vec<usize>, String> {
+    let (ai, key) = {
+        let cfg = state.cfg.lock().expect("cfg lock").clone();
+        let a = cfg.ai.clone();
+        if !a.enabled {
+            return Err("AI 未启用（设置 → AI）".into());
+        }
+        let key = if a.api_key.starts_with("dpapi:") {
+            webdav::dpapi_decrypt(&a.api_key)?
+        } else {
+            a.api_key.clone()
+        };
+        (a, key)
+    };
+    let pairs: Vec<(usize, String)> = items.into_iter().map(|it| (it.idx, it.text)).collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        ai::rerank(&ai.base_url, &key, &ai.model, ai.timeout_ms, &q, &pairs)
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+#[derive(serde::Deserialize)]
+pub struct AiItem {
+    pub idx: usize,
+    pub text: String,
+}
+
+/// AI 连通性测试：优先用表单传入值（未保存也可测），缺省回落已存配置
+#[tauri::command]
+async fn ai_test(
+    state: State<'_, AppState>,
+    base_url: Option<String>,
+    model: Option<String>,
+    key_plain: Option<String>,
+) -> Result<String, String> {
+    let (ai, key) = {
+        let cfg = state.cfg.lock().expect("cfg lock").clone();
+        let a = cfg.ai.clone();
+        let key = if a.api_key.starts_with("dpapi:") {
+            webdav::dpapi_decrypt(&a.api_key)?
+        } else {
+            a.api_key.clone()
+        };
+        (a, key)
+    };
+    let base = base_url.filter(|s| !s.trim().is_empty()).unwrap_or(ai.base_url);
+    let mdl = model.filter(|s| !s.trim().is_empty()).unwrap_or(ai.model);
+    let key = key_plain.filter(|s| !s.trim().is_empty()).unwrap_or(key);
+    tauri::async_runtime::spawn_blocking(move || {
+        let reply = ai::chat(&base, &key, &mdl, 10_000, "你是一个连通性测试端点。", "只回复两个字：正常")?;
+        Ok(reply.trim().chars().take(50).collect::<String>())
+    })
+    .await
+    .map_err(|e| format!("任务失败: {e}"))?
+}
+
+/// 明文 → DPAPI 密文（AI API Key 保存前调用；同 webdav 凭据机制）
+#[tauri::command]
+fn encrypt_secret(plain: String) -> Result<String, String> {
+    if plain.trim().is_empty() {
+        return Err("内容为空".into());
+    }
+    webdav::dpapi_encrypt(&plain)
+}
+
 /// 启动应用（仅接受开始菜单收集到的 .lnk，防任意路径执行）
 #[tauri::command]
 fn launch_app(path: String) -> Result<(), String> {
@@ -2290,6 +2363,9 @@ pub fn run() {
             reveal_file,
             search_apps,
             launch_app,
+            ai_rerank,
+            ai_test,
+            encrypt_secret,
             hide_window,
             frontend_ready,
             git_clone,

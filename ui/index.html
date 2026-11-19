@@ -50,6 +50,7 @@
       <div id="res-list" class="res-list"></div>
       <div class="res-foot">
         <span id="res-count"></span>
+        <button id="btn-ai" class="mini-btn" hidden title="用配置的 AI 模型过滤当前结果，只保留真正相关的条目">✦ AI 精选</button>
         <button id="cfg-alert" class="cfg-alert" hidden></button>
         <span class="sort-switch">
           <button class="mini-sort active" data-s="rel" title="按 BM25 相关度排序">相关度</button>
@@ -68,6 +69,7 @@
         <button class="tab" data-tab="sync">同步</button>
         <button class="tab" data-tab="general">通用</button>
         <button class="tab" data-tab="synonyms">同义词</button>
+        <button class="tab" data-tab="ai">AI</button>
       </div>
 
       <div class="tab-pane" id="tab-scope">
@@ -197,6 +199,24 @@
         </label>
       </div>
 
+      <div class="tab-pane" id="tab-ai" hidden>
+        <div class="set-col">
+          <label class="root-en" style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="ai-enabled" /> 启用 AI 筛选
+          </label>
+          <span class="lbl-line dim">OpenAI 兼容接口（/chat/completions）；启用后结果摘要将发送到所配置的服务，本地模型（Ollama 等）可完全离线。</span>
+          <input id="ai-base-url" class="set-input mono" placeholder="base_url，如 https://api.example.com/v1 或 http://127.0.0.1:11434/v1" spellcheck="false" />
+          <div class="set-row">
+            <input id="ai-key" class="set-input" type="password" placeholder="API Key（留空保持已存值；本地模型可空）" autocomplete="new-password" />
+            <button id="btn-ai-test" class="mini-btn">测试连接</button>
+          </div>
+          <div class="set-row">
+            <input id="ai-model" class="set-input mono" placeholder="模型名，如 deepseek-chat / qwen2.5:7b" spellcheck="false" />
+            <input id="ai-topn" class="set-input" type="number" min="5" max="50" value="20" title="送入模型筛选的候选段数（5-50）" />
+          </div>
+          <div id="ai-test-result" class="diag-result" hidden></div>
+        </div>
+      </div>
       <div class="tab-pane" id="tab-synonyms" hidden>
         <div class="set-col">
           <span class="lbl-line">同义词词典（JSON：词 → 数组，双向生效，保存即热重载）</span>

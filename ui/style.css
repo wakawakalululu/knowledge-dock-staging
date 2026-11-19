@@ -806,3 +806,17 @@ html, body {
   width: 14px;
   height: 14px;
 }
+
+
+/* R40：AI 精选 */
+#btn-ai {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+#btn-ai.ai-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-soft);
+}

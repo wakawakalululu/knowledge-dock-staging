@@ -18,6 +18,13 @@ window.addEventListener("unhandledrejection", (e) => {
 const $q = document.getElementById("q");
 const $bar = document.getElementById("bar");
 const $btnClear = document.getElementById("btn-clear");
+const $btnAi = document.getElementById("btn-ai");
+const $aiEnabled = document.getElementById("ai-enabled");
+const $aiBaseUrl = document.getElementById("ai-base-url");
+const $aiKey = document.getElementById("ai-key");
+const $aiModel = document.getElementById("ai-model");
+const $aiTopn = document.getElementById("ai-topn");
+const $aiTestResult = document.getElementById("ai-test-result");
 const $results = document.getElementById("results");
 const $chipsType = document.getElementById("chips-type");
 const $chipsRoot = document.getElementById("chips-root");
@@ -57,6 +64,8 @@ let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下
 let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 统一可见列表：应用条目 {kind:'app',name,path} 在前，命中条目 {kind:'hit',h,i} 在后
 let appHits = [];         // 应用搜索结果（开始菜单 .lnk，第一层）
+let aiOn = false;         // AI 精选开关（本次结果内）
+let aiKeep = null;        // AI 保留的命中原始下标集合（Set<number>）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
 const MAX_RESULTS = 500;  // 结果渲染硬上限：到顶提示细化条件，防 DOM 无限增长
 let loadingMore = false;  // 无限滚动防重入
@@ -268,11 +277,13 @@ function hitDetailHtml(h, i, query) {
 }
 
 function render(query) {
-  const hitItems = filteredHits();
+  let hitItems = filteredHits();
+  if (aiOn && aiKeep) hitItems = hitItems.filter((it) => aiKeep.has(it.i));
   visible = appHits
     .map((a) => ({ kind: "app", name: a.name, path: a.path }))
     .concat(hitItems);
   $resCount.textContent =
+    (aiOn && aiKeep ? "AI精选 · " : "") +
     (appHits.length ? `${appHits.length} 应用 · ` : "") +
     (hitItems.length ? `${hitItems.length} 条结果` : "");
   if (!visible.length) {
@@ -562,7 +573,9 @@ async function doSearch() {
   if (seq !== searchSeq) return; // 已有更新的请求，丢弃过期响应
   hits = r.hits;
   lastTerms = r.terms || [];
-  // 新结果集：上下文缓存必须清空，否则命中序号错位会展示旧内容
+  // 新结果集：AI 筛选与上下文缓存一并失效
+  aiOn = false;
+  aiKeep = null;
   ctxCache = {};
   ctxOpen = {};
   active = appHits.length || hits.length ? 0 : -1;
@@ -584,8 +597,46 @@ async function doSearch() {
         : "↓ 继续滚动加载更多…";
     $resList.appendChild(hint);
   }
+  updateAiBtn();
   recordSearch(parsed.q);
 }
+
+/* ---------- AI 精选（Phase 1） ---------- */
+function updateAiBtn() {
+  if (!$btnAi) return;
+  const usable = cfg && cfg.ai && cfg.ai.enabled && hits.length > 0;
+  $btnAi.hidden = !usable;
+  $btnAi.textContent = aiOn ? "✦ 已AI精选（取消）" : "✦ AI 精选";
+  $btnAi.classList.toggle("ai-on", aiOn);
+}
+async function toggleAiFilter() {
+  if (aiOn) {
+    aiOn = false;
+    aiKeep = null;
+    render(lastQuery);
+    updateAiBtn();
+    return;
+  }
+  if (!hits.length) return;
+  $stats.textContent = "AI 筛选中…";
+  const items = hits.map((h, i) => ({
+    idx: i,
+    text: (h.title + " " + (h.snippet || "")).slice(0, 300),
+  }));
+  try {
+    const keep = await invoke("ai_rerank", { q: lastQuery, items });
+    aiKeep = new Set(keep);
+    aiOn = true;
+    $stats.textContent = `AI 精选 ${keep.length}/${hits.length} 条`;
+  } catch (e) {
+    aiOn = false;
+    aiKeep = null;
+    $stats.textContent = "AI 筛选失败: " + e;
+  }
+  render(lastQuery);
+  updateAiBtn();
+}
+if ($btnAi) $btnAi.addEventListener("click", toggleAiFilter);
 
 function clearInput() {
   $q.value = "";
@@ -746,6 +797,14 @@ function openSettings() {
     $setShortcut.value = cfg.shortcut;
     $setWidth.value = cfg.width;
     $setPin.checked = cfg.pin_mode;
+    const ai = cfg.ai || {};
+    $aiEnabled.checked = !!ai.enabled;
+    $aiBaseUrl.value = ai.base_url || "";
+    $aiModel.value = ai.model || "";
+    $aiTopn.value = ai.top_n || 20;
+    // API Key 不回显（密文占位）；输入留空 = 保持已存值
+    $aiKey.value = "";
+    $aiKey.placeholder = ai.api_key ? "已保存（输入新值可更换；留空保持）" : "API Key（留空保持已存值；本地模型可空）";
   }
   renderRootsEditor();
   renderStats();
@@ -1296,6 +1355,12 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
       max_age_days: Math.max(0, Number($setMaxage.value) || 0),
     };
     const dirs = cfg.roots.map((r) => r.path);
+    // AI 配置：API Key 输入为空沿用旧密文；输入新值则 DPAPI 加密落盘
+    const newKey = $aiKey.value.trim();
+    let aiKeyStored = (cfg.ai && cfg.ai.api_key) || "";
+    if (newKey) {
+      aiKeyStored = await invoke("encrypt_secret", { plain: newKey });
+    }
     const next = {
       ...cfg,
       knowledge_dirs: dirs,
@@ -1303,6 +1368,14 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
       shortcut: $setShortcut.value.trim() || cfg.shortcut,
       width: Number($setWidth.value) || cfg.width,
       pin_mode: $setPin.checked,
+      ai: {
+        enabled: $aiEnabled.checked,
+        base_url: $aiBaseUrl.value.trim(),
+        api_key: aiKeyStored,
+        model: $aiModel.value.trim(),
+        timeout_ms: (cfg.ai && cfg.ai.timeout_ms) || 20000,
+        top_n: Math.min(50, Math.max(5, Number($aiTopn.value) || 20)),
+      },
     };
     cfg = await invoke("save_config", { cfg: next });
     applyPin();
@@ -1326,6 +1399,32 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
 document.getElementById("btn-quit").addEventListener("click", () => invoke("quit_app"));
 
 /* 清空搜索历史 */
+$btnAiTest = document.getElementById("btn-ai-test");
+if ($btnAiTest) $btnAiTest.addEventListener("click", async () => {
+  // 先把当前表单值写入内存 cfg（未落盘），测试用最新值
+  if (cfg) {
+    cfg.ai = {
+      ...(cfg.ai || {}),
+      enabled: $aiEnabled.checked,
+      base_url: $aiBaseUrl.value.trim(),
+      model: $aiModel.value.trim(),
+      top_n: Math.min(50, Math.max(5, Number($aiTopn.value) || 20)),
+    };
+  }
+  $aiTestResult.hidden = false;
+  $aiTestResult.innerHTML = '<div class="diag-line">测试中…</div>';
+  try {
+    const reply = await invoke("ai_test", {
+      baseUrl: $aiBaseUrl.value.trim(),
+      model: $aiModel.value.trim(),
+      keyPlain: $aiKey.value.trim(),
+    });
+    $aiTestResult.innerHTML = `<div class="diag-line ok">✓ 连通正常，模型回复：${escapeHtml(reply)}</div>`;
+  } catch (e) {
+    $aiTestResult.innerHTML = `<div class="diag-line err">✗ ${escapeHtml(String(e))}</div>`;
+  }
+});
+
 document.getElementById("btn-clear-history").addEventListener("click", async () => {
   await invoke("clear_search_history");
   searchHistory = [];
@@ -1492,6 +1591,7 @@ listen("ui-reset", () => {
   // 静默巡检配置（error 级问题显示在状态栏，可点击修复）
   healthPatrol();
   updateScopeIndicator(parseScopePrefix($q.value));
+  updateAiBtn();
   // 通知主进程：前端就绪，可以显示窗口（避免 webview 未加载完的黑屏/闪块）
   invoke("frontend_ready").catch(() => {});
 })();

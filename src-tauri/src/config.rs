@@ -120,6 +120,48 @@ pub struct Config {
     /// 各范围使用次数（用于排序和统计）
     #[serde(default)]
     pub scope_usage: HashMap<String, u64>,
+    /// AI 引擎（OpenAI 兼容接口；默认关闭，未启用时全部静默回退 BM25）
+    #[serde(default)]
+    pub ai: AiConfig,
+}
+
+/// AI 引擎配置（Phase 1：结果筛选/重排）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiConfig {
+    /// 是否启用（关闭时前端不显示 AI 入口，后端拒绝调用）
+    #[serde(default)]
+    pub enabled: bool,
+    /// OpenAI 兼容 base_url，如 https://api.example.com/v1 或 http://127.0.0.1:11434/v1
+    #[serde(default)]
+    pub base_url: String,
+    /// API Key（明文或 dpapi: 密文；本地模型可留空）
+    #[serde(default)]
+    pub api_key: String,
+    /// 模型名
+    #[serde(default)]
+    pub model: String,
+    /// 单次调用超时（毫秒）
+    #[serde(default = "default_ai_timeout_ms")]
+    pub timeout_ms: u64,
+    /// 送入模型筛选的候选段数
+    #[serde(default = "default_ai_top_n")]
+    pub top_n: usize,
+}
+
+fn default_ai_timeout_ms() -> u64 { 20_000 }
+fn default_ai_top_n() -> usize { 20 }
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        AiConfig {
+            enabled: false,
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            timeout_ms: default_ai_timeout_ms(),
+            top_n: default_ai_top_n(),
+        }
+    }
 }
 
 impl Config {
@@ -246,6 +288,7 @@ impl Default for Config {
             git_sources: Vec::new(),
             webdav_sources: Vec::new(),
             scope_usage: HashMap::new(),
+            ai: AiConfig::default(),
         }
     }
 }
