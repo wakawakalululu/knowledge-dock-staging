@@ -1646,7 +1646,7 @@ fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
     let stats = {
         let mut cfg = state.cfg.lock().expect("cfg lock");
         if let Some(s) = cfg.git_sources.iter_mut().find(|s| s.name == name) {
-            s.last_sync = gitsync::now_secs();
+            s.last_sync = Some(gitsync::now_secs());
             s.last_error = None;
         }
         let roots = cfg.root_specs();
@@ -1734,7 +1734,7 @@ fn git_clone_blocking(
             branch: branch.clone(),
             enabled: true,
             interval_min,
-            last_sync: gitsync::now_secs(),
+            last_sync: Some(gitsync::now_secs()),
             last_error: None,
         });
         // 注册为知识根：.git 目录独立排除（扫描层另有 . 开头目录兜底）
@@ -1937,7 +1937,7 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
     let stats = {
         let mut cfg = state.cfg.lock().expect("cfg lock");
         if let Some(s) = cfg.webdav_sources.iter_mut().find(|s| s.name == name) {
-            s.last_sync = gitsync::now_secs();
+            s.last_sync = Some(gitsync::now_secs());
             s.last_error = None;
         }
         let roots = cfg.root_specs();
@@ -1969,7 +1969,7 @@ fn sync_due_sources(app: &AppHandle) {
             .filter(|s| {
                 s.enabled
                     && s.interval_min > 0
-                    && (s.last_sync == 0 || now.saturating_sub(s.last_sync) >= s.interval_min * 60)
+                    && (s.last_sync.unwrap_or(0) == 0 || now.saturating_sub(s.last_sync.unwrap_or(0)) >= s.interval_min * 60)
             })
             .map(|s| s.name.clone())
             .collect()
@@ -1991,7 +1991,7 @@ fn sync_due_sources(app: &AppHandle) {
             .filter(|s| {
                 s.enabled
                     && s.interval_min > 0
-                    && (s.last_sync == 0 || now.saturating_sub(s.last_sync) >= s.interval_min * 60)
+                    && (s.last_sync.unwrap_or(0) == 0 || now.saturating_sub(s.last_sync.unwrap_or(0)) >= s.interval_min * 60)
             })
             .map(|s| s.name.clone())
             .collect()
@@ -2096,7 +2096,7 @@ fn webdav_add_blocking(
         password: stored_password,
         enabled: true,
         interval_min,
-        last_sync: gitsync::now_secs(),
+        last_sync: Some(gitsync::now_secs()),
         last_error: None,
     });
     let dir_str = local_root.to_string_lossy().to_string();

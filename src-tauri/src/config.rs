@@ -45,7 +45,7 @@ pub struct GitRepoSource {
     pub interval_min: u64,
     /// 最近一次成功同步的 unix 秒
     #[serde(default)]
-    pub last_sync: u64,
+    pub last_sync: Option<u64>,
     /// 最近一次同步的错误信息（成功后清空）
     #[serde(default)]
     pub last_error: Option<String>,
@@ -72,7 +72,7 @@ pub struct WebdavSource {
     #[serde(default)]
     pub interval_min: u64,
     #[serde(default)]
-    pub last_sync: u64,
+    pub last_sync: Option<u64>,
     #[serde(default)]
     pub last_error: Option<String>,
 }
@@ -245,10 +245,17 @@ pub fn load(app: &tauri::AppHandle) -> Config {
     let Some(path) = config_path(app) else {
         return Config::default();
     };
-    let mut cfg: Config = fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    let mut cfg: Config = match fs::read_to_string(path) {
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(c) => c,
+            // 解析失败不静默：打日志可见（外部工具生成的配置容错）
+            Err(e) => {
+                eprintln!("[config] config.json 解析失败，回退默认配置: {e}");
+                Config::default()
+            }
+        },
+        Err(_) => Config::default(),
+    };
     migrate(&mut cfg);
     // 容错校验：无效值回退默认
     if cfg.width < 320.0 || cfg.width > 1600.0 { cfg.width = 600.0; }
