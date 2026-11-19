@@ -279,20 +279,20 @@ html, body {
 }
 
 .hit {
-  padding: 8px 10px;
+  padding: 5px 10px;
   border-radius: 9px;
   cursor: pointer;
   /* 跳过视口外行渲染：大结果集滚动/追加时布局开销大幅下降（Chromium 85+） */
   content-visibility: auto;
-  contain-intrinsic-size: auto 96px;
+  contain-intrinsic-size: auto 40px;
 }
 .hit:hover, .hit.active { background: var(--hover); }
 .hit.active { outline: 1px solid var(--accent-soft); }
 .hit-top {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 3px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 .badge {
   flex: none;
@@ -315,13 +315,15 @@ html, body {
   text-overflow: ellipsis;
 }
 .hit-path {
-  flex: none;
+  flex: 1 1 auto;
+  margin-left: auto;
   font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 30%;
+  text-align: right;
+  max-width: 34%;
 }
 .ctx-btn {
   flex: none;
@@ -773,3 +775,34 @@ html, body {
 }
 .scope-indicator:hover { background: var(--accent); color: #fff; }
 .scope-indicator[hidden] { display: none; }
+
+
+/* R39：uTools 单行布局——活跃行详情 / 应用行 */
+.hit-detail {
+  padding: 2px 10px 4px 28px;
+}
+.hit-detail .hit-snippet {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hit-detail .hit-bc {
+  margin-bottom: 2px;
+}
+.app-row .app-ico {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.app-row .app-ico svg {
+  width: 14px;
+  height: 14px;
+}

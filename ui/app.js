@@ -55,7 +55,8 @@ let ctxCache = {};        // 命中项上下文缓存: 原始下标 -> string
 let ctxOpen = {};         // 命中项上下文展开状态
 let typeFilter = "all";   // 类型范围：all | Law | Manual | QA | Note（下沉引擎）
 let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
-let visible = [];         // 过滤后的可见列表 [{h, i}]（i 为原始下标）
+let visible = [];         // 统一可见列表：应用条目 {kind:'app',name,path} 在前，命中条目 {kind:'hit',h,i} 在后
+let appHits = [];         // 应用搜索结果（开始菜单 .lnk，第一层）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
 const MAX_RESULTS = 500;  // 结果渲染硬上限：到顶提示细化条件，防 DOM 无限增长
 let loadingMore = false;  // 无限滚动防重入
@@ -257,9 +258,23 @@ async function applyPreset(name) {
 }
 
 /* ---------- 渲染 ---------- */
+/** 活跃行的详情：面包屑 + 摘要 + 已展开的上下文 */
+function hitDetailHtml(h, i, query) {
+  const bc = (h.breadcrumbs && h.breadcrumbs.length)
+    ? `<div class="hit-bc">${h.breadcrumbs.map((b) => escapeHtml(b)).join('<span class="bc-sep">›</span>')}</div>`
+    : "";
+  const ctx = ctxOpen[i] && ctxCache[i] ? renderCtx(ctxCache[i], i) : "";
+  return `${bc}<div class="hit-snippet">${highlight(h.snippet, query)}</div>${ctx}`;
+}
+
 function render(query) {
-  visible = filteredHits();
-  $resCount.textContent = visible.length ? `${visible.length} 条结果` : "";
+  const hitItems = filteredHits();
+  visible = appHits
+    .map((a) => ({ kind: "app", name: a.name, path: a.path }))
+    .concat(hitItems);
+  $resCount.textContent =
+    (appHits.length ? `${appHits.length} 应用 · ` : "") +
+    (hitItems.length ? `${hitItems.length} 条结果` : "");
   if (!visible.length) {
     const anyHits = hits.length > 0;
     $resList.innerHTML =
@@ -272,36 +287,50 @@ function render(query) {
       "</div>";
     return;
   }
-  // 分组模式下预计算各库条数，root 变化处插 sticky 库头
+  // 分组模式下预计算各库条数（仅知识库命中），root 变化处插 sticky 库头
   const groupCounts = new Map();
-  for (const { h } of visible) {
-    groupCounts.set(h.root, (groupCounts.get(h.root) || 0) + 1);
+  for (const item of hitItems) {
+    groupCounts.set(item.h.root, (groupCounts.get(item.h.root) || 0) + 1);
   }
   let prevRoot = null;
+  let appHeadDone = false;
   $resList.innerHTML = visible
-    .map(({ h, i }, pos) => {
+    .map((item, pos) => {
+      if (item.kind === "app") {
+        const head = !appHeadDone
+          ? `<div class="group-head">应用 · ${appHits.length}</div>`
+          : "";
+        appHeadDone = true;
+        return head + `
+      <div class="hit app-row ${pos === active ? "active" : ""}" data-pos="${pos}">
+        <span class="app-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg></span>
+        <span class="hit-title">${escapeHtml(item.name)}</span>
+        <span class="hit-path" title="${escapeHtml(item.path)}">启动应用</span>
+        <button class="ctx-btn act-open" data-abs="${escapeHtml(item.path)}" title="启动应用">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+        </button>
+      </div>`;
+      }
+      const { h, i } = item;
       const head =
         sortMode === "group" && h.root !== prevRoot
           ? `<div class="group-head">${escapeHtml(h.root || "未分库")} · ${groupCounts.get(h.root) || 0} 条</div>`
           : "";
       prevRoot = h.root;
-      const bc = (h.breadcrumbs && h.breadcrumbs.length)
-        ? `<div class="hit-bc">${h.breadcrumbs.map((b) => escapeHtml(b)).join('<span class="bc-sep">›</span>')}</div>`
-        : "";
       const badge = TYPE_LABEL[h.doc_type]
         ? `<span class="badge badge-${h.doc_type.toLowerCase()}">${TYPE_LABEL[h.doc_type]}</span>`
         : "";
       const rootTag = h.root
         ? `<span class="hit-root">${escapeHtml(h.root)}</span>`
         : "";
-      // 文件修改时间（最新/分组模式下显示，兼作排序依据的可视化）
       const mt = h.mtime
         ? `<span class="hit-mtime" title="mtime=${h.mtime}">${escapeHtml(relTime(Math.floor(h.mtime / 1000)))}</span>`
         : `<span class="hit-mtime" title="mtime=MISSING"></span>`;
-      const open = ctxOpen[i];
-      const ctx = open
-        ? renderCtx(ctxCache[i], i)
-        : "";
+      // uTools 单行布局：摘要/面包屑仅随活跃行展开（.hit-detail）
+      const detail =
+        pos === active
+          ? `<div class="hit-detail">${hitDetailHtml(h, i, query)}</div>`
+          : "";
       return head + `
       <div class="hit ${pos === active ? "active" : ""}" data-pos="${pos}">
         <div class="hit-top">
@@ -323,16 +352,14 @@ function render(query) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5"/><path d="m7 13 5 5 5-5"/></svg>
           </button>
         </div>
-        ${bc}
-        <div class="hit-snippet">${highlight(h.snippet, query)}</div>
-        ${ctx}
+        ${detail}
       </div>`;
     })
     .join("");
 
   $resList.querySelectorAll(".hit").forEach((el) => {
     el.addEventListener("click", (e) => {
-      // 点在操作按钮上时不触发打开
+      // 点在操作按钮上时不触发打开/启动
       if (e.target.closest(".ctx-btn")) return;
       openHit(Number(el.dataset.pos), false);
     });
@@ -342,6 +369,8 @@ function render(query) {
     });
     el.addEventListener("mousemove", () => setActive(Number(el.dataset.pos)));
   });
+
+
   // 当前显示模式随计数一起展示（便于确认切换是否生效）
   $resCount.textContent = visible.length
     ? `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode}`
@@ -433,19 +462,34 @@ async function toggleContext(origIdx) {
 
 function setActive(pos) {
   if (pos === active) return;
+  const prev = active;
   active = pos;
-  $resList.querySelectorAll(".hit").forEach((el, idx) => {
-    el.classList.toggle("active", idx === pos);
-  });
+  // 外科式更新：active 类 + 详情行（摘要/面包屑）随选中换位，不重建整树（保滚动位置）
+  const prevEl = $resList.querySelector(`.hit[data-pos="${prev}"]`);
+  if (prevEl) {
+    prevEl.classList.remove("active");
+    const d = prevEl.querySelector(".hit-detail");
+    if (d) d.remove();
+  }
   const el = $resList.querySelector(`.hit[data-pos="${pos}"]`);
-  if (el) el.scrollIntoView({ block: "nearest" });
+  if (el) {
+    el.classList.add("active");
+    const item = visible[pos];
+    if (item && item.kind === "hit") {
+      const wrap = document.createElement("div");
+      wrap.className = "hit-detail";
+      wrap.innerHTML = hitDetailHtml(item.h, item.i, lastQuery);
+      el.appendChild(wrap);
+    }
+    el.scrollIntoView({ block: "nearest" });
+  }
 }
 
 const SORT_LABEL = { rel: "相关度", mtime: "最新", group: "按库" };
 
 /** 类型过滤后的可见列表（类型 chips 已下沉引擎，此处按显示模式重排） */
 function filteredHits() {
-  const base = hits.map((h, i) => ({ h, i }));
+  const base = hits.map((h, i) => ({ kind: "hit", h, i }));
   if (sortMode === "mtime") {
     // 最近修改优先（mtime 缺失排最后）
     base.sort((a, b) => (b.h.mtime || 0) - (a.h.mtime || 0));
@@ -480,6 +524,7 @@ async function doSearch() {
   const raw = $q.value;
   if (!raw.trim()) {
     hits = [];
+    appHits = [];
     active = -1;
     lastTerms = [];
     lastQuery = "";
@@ -495,12 +540,17 @@ async function doSearch() {
   const seq = ++searchSeq; // 本次请求的序号；响应到达时若已过期则丢弃
   let r;
   try {
-    r = await invoke("search", {
-      q: parsed.q,
-      typeFilter: parsed.typeF === "all" ? null : parsed.typeF,
-      rootFilter: parsed.rootF === "all" ? null : parsed.rootF,
-      limit: searchLimit,
-    });
+    [r, appHits] = await Promise.all([
+      invoke("search", {
+        q: parsed.q,
+        typeFilter: parsed.typeF === "all" ? null : parsed.typeF,
+        rootFilter: parsed.rootF === "all" ? null : parsed.rootF,
+        limit: searchLimit,
+      }),
+      parsed.q
+        ? invoke("search_apps", { q: parsed.q, limit: 8 }).catch(() => [])
+        : Promise.resolve([]),
+    ]);
   } catch (e) {
     if (seq === searchSeq) {
       hits = [];
@@ -515,12 +565,14 @@ async function doSearch() {
   // 新结果集：上下文缓存必须清空，否则命中序号错位会展示旧内容
   ctxCache = {};
   ctxOpen = {};
-  active = hits.length ? 0 : -1;
+  active = appHits.length || hits.length ? 0 : -1;
   // 关键：用 updateView 展开窗口+显示结果面板（仅 render 不改窗口形态，
   // 曾导致"输入后搜索在后台跑但界面无反应"）
   updateView();
   if (r.duration_ms) {
-    $resCount.textContent = `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode} · ${r.duration_ms}ms`;
+    $resCount.textContent =
+      (appHits.length ? `${appHits.length} 应用 · ` : "") +
+      `${hits.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode} · ${r.duration_ms}ms`;
   }
   // 返回满页说明可能还有更多结果 → 底部显示"滚动加载"提示（替代手动按钮）
   if (hits.length >= searchLimit) {
@@ -539,6 +591,7 @@ function clearInput() {
   $q.value = "";
   $btnClear.hidden = true;
   hits = [];
+  appHits = [];
   active = -1;
   lastTerms = [];
   lastQuery = "";
@@ -551,6 +604,13 @@ function clearInput() {
 function openHit(pos, reveal) {
   const item = visible[pos];
   if (!item) return;
+  if (item.kind === "app") {
+    // 启动应用（系统 ShellExecute 解析 lnk）；定位则显示所在开始菜单目录
+    invoke(reveal ? "reveal_file" : "launch_app", { path: item.path }).catch((e) =>
+      console.error("启动失败:", e)
+    );
+    return;
+  }
   invoke(reveal ? "reveal_file" : "open_file", { path: item.h.abs }).catch((e) =>
     console.error("打开失败:", e)
   );

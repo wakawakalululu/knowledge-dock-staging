@@ -4,6 +4,7 @@
 //! 全局快捷键唤起/隐藏，失焦自动隐藏（钉住模式除外）。
 //! 检索：Tantivy BM25 + jieba 分词 + 持久化索引 + 同义词改写（纯离线）。
 
+pub mod apps;
 pub mod config;
 pub mod matching;
 pub mod scope;
@@ -45,6 +46,8 @@ struct AppState {
     git_lock: Mutex<()>,
     /// WebDAV 同步互斥
     webdav_lock: Mutex<()>,
+    /// 开始菜单应用列表缓存（首次搜索时惰性构建）
+    apps_cache: Mutex<Option<Vec<apps::AppHit>>>,
 }
 
 /// 拖动节流：窗口移动事件的保存间隔
@@ -153,7 +156,10 @@ fn reveal(app: &AppHandle) {
 
 fn toggle_visible(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        if win.is_visible().unwrap_or(false) {
+        let visible = win.is_visible().unwrap_or(false);
+        let focused = win.is_focused().unwrap_or(false);
+        // uTools 语义：可见且聚焦 → 隐藏；可见但未聚焦 → 拉到前台；隐藏 → 唤起
+        if visible && focused {
             let _ = win.hide();
         } else {
             reveal(app);
@@ -1469,6 +1475,29 @@ fn expand_context(
     })
 }
 
+/// 应用搜索：开始菜单 .lnk 名称子串匹配（第一层结果）
+#[tauri::command]
+fn search_apps(q: String, limit: Option<usize>, state: State<'_, AppState>) -> Vec<apps::AppHit> {
+    let lim = limit.unwrap_or(8).clamp(1, 30);
+    let mut cache = state.apps_cache.lock().expect("apps cache lock");
+    apps::search(&q, lim, &mut cache)
+}
+
+/// 启动应用（仅接受开始菜单收集到的 .lnk，防任意路径执行）
+#[tauri::command]
+fn launch_app(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    let is_lnk = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("lnk"))
+        .unwrap_or(false);
+    if !is_lnk || !p.is_file() {
+        return Err("仅支持启动开始菜单中的应用".into());
+    }
+    open::that(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn open_file(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| e.to_string())
@@ -2161,6 +2190,7 @@ pub fn run() {
                 watcher: Mutex::new(None),
                 git_lock: Mutex::new(()),
                 webdav_lock: Mutex::new(()),
+                apps_cache: Mutex::new(None),
             });
 
             // 恢复窗口位置与宽度（越界则保持默认居中）
@@ -2258,6 +2288,8 @@ pub fn run() {
             apply_import_config,
             open_file,
             reveal_file,
+            search_apps,
+            launch_app,
             hide_window,
             frontend_ready,
             git_clone,
