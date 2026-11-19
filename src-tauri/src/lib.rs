@@ -7,6 +7,7 @@
 pub mod ai;
 pub mod apps;
 pub mod http_api;
+pub mod logging;
 pub mod config;
 pub mod matching;
 pub mod scope;
@@ -115,8 +116,10 @@ fn sync_and_emit(app: &AppHandle) {
     if roots.is_empty() {
         return;
     }
+    kdlog!(info, "engine", "重新扫描开始（{} 根）", roots.len());
     match state.engine.sync_roots(&roots, &scope) {
         Ok(stats) => {
+            kdlog!(info, "engine", "同步完成 docs={} blocks={} updated={} removed={} {}ms", stats.docs, stats.chunks, stats.updated, stats.removed, stats.duration_ms);
             let _ = app.emit("index-updated", &stats);
         }
         Err(e) => {
@@ -144,7 +147,7 @@ fn start_watchers(app: &AppHandle) {
         if watcher.watch(&spec.path, RecursiveMode::Recursive).is_ok() {
             watched_any = true;
         } else {
-            eprintln!("[watcher] 跳过不可监听的知识库根: {}", spec.path.display());
+            kdlog!(warn, "watcher", "跳过不可监听的知识库根: {}", spec.path.display());
         }
     }
     if !watched_any {
@@ -1578,6 +1581,22 @@ async fn ai_test(
 }
 
 /// 明文 → DPAPI 密文（AI API Key 保存前调用；同 webdav 凭据机制）
+/// 打开日志目录（排查问题入口；托盘/设置共用）
+#[tauri::command]
+fn open_logs_dir(app: AppHandle) -> Result<(), String> {
+    match logging::dir() {
+        Some(d) => {
+            let _ = std::fs::create_dir_all(&d);
+            std::process::Command::new("explorer")
+                .arg(d.to_string_lossy().to_string())
+                .spawn()
+                .map(|_| ())
+                .map_err(|e| format!("打开失败: {e}"))
+        }
+        None => Err("日志未初始化".into()),
+    }
+}
+
 #[tauri::command]
 fn encrypt_secret(plain: String) -> Result<String, String> {
     if plain.trim().is_empty() {
@@ -2285,6 +2304,12 @@ pub fn run() {
             );
             let engine = Arc::new(Engine::open_or_create(&data_dir.join("index"), synonyms, stopwords)?);
 
+            // 日志系统最早期初始化（config 解析失败等早期事件也要落盘）
+            if let Ok(log_dir) = handle.path().app_config_dir().map(|d| d.join("logs")) {
+                logging::init(log_dir);
+            }
+            kdlog!(info, "app", "知识悬浮搜索 v{} 启动", env!("CARGO_PKG_VERSION"));
+
             // 先注册全局状态（后续 setup 内的所有 state() 访问都依赖它）
             let engine_for_api = engine.clone();
             app.manage(AppState {
@@ -2439,6 +2464,7 @@ pub fn run() {
             ai_rerank,
             ai_test,
             encrypt_secret,
+            open_logs_dir,
             hide_window,
             frontend_ready,
             git_clone,

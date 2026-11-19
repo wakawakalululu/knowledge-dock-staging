@@ -19,11 +19,11 @@ pub fn spawn(app: tauri::AppHandle, engine: Arc<Engine>, port: u16, token: Strin
         let listener = match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[api] 127.0.0.1:{port} 绑定失败（端口被占用或被禁用）: {e}");
+                crate::kdlog!(error, "api", "127.0.0.1:{port} 绑定失败（端口被占用或被禁用）: {e}");
                 return;
             }
         };
-        eprintln!("[api] HTTP 检索接口已启动 http://127.0.0.1:{port}/api/search?q=...");
+        crate::kdlog!(info, "api", "HTTP 检索接口已启动 http://127.0.0.1:{port}/api/search");
         for stream in listener.incoming() {
             match stream {
                 Ok(s) => {
@@ -120,7 +120,7 @@ fn handle(mut stream: TcpStream, app: tauri::AppHandle, engine: Arc<Engine>, tok
                         match crate::webdav::dpapi_decrypt(&cfg_ai.api_key) {
                             Ok(k) => k,
                             Err(e) => {
-                                eprintln!("[api] AI key 解密失败: {e}");
+                                crate::kdlog!(warn, "api", "AI key 解密失败: {e}");
                                 String::new()
                             }
                         }
@@ -146,8 +146,8 @@ fn handle(mut stream: TcpStream, app: tauri::AppHandle, engine: Arc<Engine>, tok
                                     .collect();
                                 ai_used = true;
                             }
-                            Ok(_) => { eprintln!("[api] AI 筛选返回空 keep，保留全量"); }
-                            Err(e) => { eprintln!("[api] AI 筛选失败: {e}"); }
+                            Ok(_) => { crate::kdlog!(warn, "api", "AI 筛选返回空 keep，保留全量"); }
+                            Err(e) => { crate::kdlog!(warn, "api", "AI 筛选失败: {e}"); }
                         }
                     }
                 }
@@ -165,6 +165,11 @@ fn handle(mut stream: TcpStream, app: tauri::AppHandle, engine: Arc<Engine>, tok
                     "hits": resp.hits,
                 }),
             )
+        }
+        "/api/logs" => {
+            let n = params.get("lines").and_then(|v| v.parse::<usize>().ok()).map(|v| v.clamp(1, 2000)).unwrap_or(200);
+            let text = crate::logging::read_tail(n);
+            respond(&mut stream, 200, &json!({"ok": true, "lines": text.lines().count(), "tail": text}))
         }
         "/api/stats" => {
             let d = engine.stats_detail();

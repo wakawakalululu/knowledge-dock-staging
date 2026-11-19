@@ -250,7 +250,7 @@ pub fn load(app: &tauri::AppHandle) -> Config {
             Ok(c) => c,
             // 解析失败不静默：打日志可见（外部工具生成的配置容错）
             Err(e) => {
-                eprintln!("[config] config.json 解析失败，回退默认配置: {e}");
+                crate::kdlog!(warn, "config", "config.json 解析失败，回退默认配置: {e}");
                 Config::default()
             }
         },

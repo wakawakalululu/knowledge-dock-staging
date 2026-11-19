@@ -414,7 +414,7 @@ impl Engine {
             }
         }
         for f in &failed_roots {
-            eprintln!("[engine] 跳过不可扫的知识库根: {f}");
+            crate::kdlog!(warn, "engine", "跳过不可扫的知识库根: {f}");
         }
 
         let manifest_path = self.index_dir.join("manifest.json");
@@ -719,7 +719,7 @@ fn build(parser: &QueryParser, effective: &[String]) -> Option<Box<dyn tantivy::
         Ok(q) => Some(q),
         Err(e) => {
             #[cfg(debug_assertions)]
-            eprintln!("[engine] parse_query 失败({e:?})，尝试加引号兜底: {joined}");
+            crate::kdlog!(warn, "engine", "parse_query 失败({e:?})，尝试加引号兜底: {joined}");
             let _ = &e;
             let quoted = effective
                 .iter()

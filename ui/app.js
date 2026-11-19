@@ -1534,6 +1534,14 @@ if ($btnAiTest) $btnAiTest.addEventListener("click", async () => {
   }
 });
 
+document.getElementById("btn-logs").addEventListener("click", async () => {
+  try {
+    await invoke("open_logs_dir");
+  } catch (e) {
+    $stats.textContent = "打开日志目录失败: " + e;
+  }
+});
+
 document.getElementById("btn-clear-history").addEventListener("click", async () => {
   await invoke("clear_search_history");
   searchHistory = [];
