@@ -1662,16 +1662,16 @@ fn git_clone_blocking(
     Ok(cfg_out)
 }
 
-/// 手动拉取某仓库更新
+/// 手动拉取某仓库更新（返回 (提示消息, 配置)；消息可含"已切换分支"）
 #[tauri::command]
-async fn git_pull(app: AppHandle, name: String) -> Result<Config, String> {
+async fn git_pull(app: AppHandle, name: String) -> Result<(String, Config), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let result = git_pull_one(&app, &name);
         let state: State<AppState> = app.state();
         match result {
-            Ok(_msg) => {
+            Ok(msg) => {
                 let cfg_out = state.cfg.lock().expect("cfg lock").clone();
-                Ok(cfg_out)
+                Ok((msg, cfg_out))
             }
             Err(e) => {
                 git_record_error(&app, &name, &e);

@@ -963,10 +963,11 @@ if ($gitList) {
     if (btn.dataset.act === "pull") {
       $stats.textContent = `更新 ${name} 中…`;
       try {
-        cfg = await invoke("git_pull", { name });
+        const [msg, nextCfg] = await invoke("git_pull", { name });
+        cfg = nextCfg;
         renderGitList();
         renderRootChips();
-        $stats.textContent = "更新完成，检索内容已刷新";
+        $stats.textContent = msg || "更新完成，检索内容已刷新";
       } catch (err) {
         $stats.textContent = "更新失败: " + err;
         renderGitList();
