@@ -5,14 +5,16 @@
 //!   GET /api/health                             → {"ok":true}
 //! token 非空时要求 ?token= 或 Authorization: Bearer 匹配。
 
+use crate::ai;
 use crate::engine::Engine;
+use tauri::Manager;
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 /// 启动 API 服务线程（端口绑定失败仅打日志，不影响主应用）
-pub fn spawn(engine: Arc<Engine>, port: u16, token: String) {
+pub fn spawn(app: tauri::AppHandle, engine: Arc<Engine>, port: u16, token: String) {
     std::thread::spawn(move || {
         let listener = match TcpListener::bind(("127.0.0.1", port)) {
             Ok(l) => l,
@@ -25,10 +27,11 @@ pub fn spawn(engine: Arc<Engine>, port: u16, token: String) {
         for stream in listener.incoming() {
             match stream {
                 Ok(s) => {
+                    let app = app.clone();
                     let engine = engine.clone();
                     let token = token.clone();
                     std::thread::spawn(move || {
-                        let _ = handle(s, engine, token);
+                        let _ = handle(s, app, engine, token);
                     });
                 }
                 Err(_) => continue,
@@ -37,7 +40,7 @@ pub fn spawn(engine: Arc<Engine>, port: u16, token: String) {
     });
 }
 
-fn handle(mut stream: TcpStream, engine: Arc<Engine>, token: String) -> std::io::Result<()> {
+fn handle(mut stream: TcpStream, app: tauri::AppHandle, engine: Arc<Engine>, token: String) -> std::io::Result<()> {
     // 读请求头（读到空行即止；忽略 body）
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
@@ -103,6 +106,52 @@ fn handle(mut stream: TcpStream, engine: Arc<Engine>, token: String) -> std::io:
             let mut resp =
                 engine.search(&q, limit, type_filter, root_filter);
             resp.duration_ms = start.elapsed().as_millis() as u64;
+            // ai=1 → 用配置的模型筛选（未启用/失败时静默返回全量，ai_used=false）
+            let mut ai_used = false;
+            let ai_on = params
+                .get("ai")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if ai_on && !resp.hits.is_empty() {
+                let state = app.state::<crate::AppState>();
+                let cfg_ai = state.cfg.lock().expect("cfg lock").ai.clone();
+                if cfg_ai.enabled && !cfg_ai.base_url.trim().is_empty() {
+                    let key = if cfg_ai.api_key.starts_with("dpapi:") {
+                        match crate::webdav::dpapi_decrypt(&cfg_ai.api_key) {
+                            Ok(k) => k,
+                            Err(e) => {
+                                eprintln!("[api] AI key 解密失败: {e}");
+                                String::new()
+                            }
+                        }
+                    } else {
+                        cfg_ai.api_key.clone()
+                    };
+                    if !key.starts_with("dpapi:") {
+                        let take = cfg_ai.top_n.min(resp.hits.len());
+                        let items: Vec<(usize, String)> = resp.hits.iter().take(take)
+                            .enumerate()
+                            .map(|(i, h)| (i, format!("{} {}", h.title, h.snippet)))
+                            .collect();
+                        let q2 = q.clone();
+                        let b2 = cfg_ai.base_url.clone();
+                        let m2 = cfg_ai.model.clone();
+                        let t2 = cfg_ai.timeout_ms;
+                        match ai::rerank(&b2, &key, &m2, t2, &q2, &items) {
+                            Ok(keep) if !keep.is_empty() => {
+                                let keep_set: std::collections::HashSet<usize> = keep.into_iter().collect();
+                                resp.hits = resp.hits.into_iter().enumerate()
+                                    .filter(|(i, _)| keep_set.contains(i))
+                                    .map(|(_, h)| h)
+                                    .collect();
+                                ai_used = true;
+                            }
+                            Ok(_) => { eprintln!("[api] AI 筛选返回空 keep，保留全量"); }
+                            Err(e) => { eprintln!("[api] AI 筛选失败: {e}"); }
+                        }
+                    }
+                }
+            }
             respond(
                 &mut stream,
                 200,
@@ -112,6 +161,7 @@ fn handle(mut stream: TcpStream, engine: Arc<Engine>, token: String) -> std::io:
                     "query": q,
                     "terms": resp.terms,
                     "duration_ms": resp.duration_ms,
+                    "ai_used": ai_used,
                     "hits": resp.hits,
                 }),
             )

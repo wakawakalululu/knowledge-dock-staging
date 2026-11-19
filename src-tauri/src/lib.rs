@@ -2270,7 +2270,7 @@ pub fn run() {
 
             // 本地 HTTP 检索接口（供其它程序调用；端口/token 在 config.api，改动需重启）
             if cfg.api.enabled {
-                http_api::spawn(engine_for_api, cfg.api.port, cfg.api.token.clone());
+                http_api::spawn(handle.clone(), engine_for_api, cfg.api.port, cfg.api.token.clone());
             }
 
             // 恢复窗口位置与宽度（越界则保持默认居中）
