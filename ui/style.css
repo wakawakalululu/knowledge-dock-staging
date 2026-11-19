@@ -282,6 +282,9 @@ html, body {
   padding: 8px 10px;
   border-radius: 9px;
   cursor: pointer;
+  /* 跳过视口外行渲染：大结果集滚动/追加时布局开销大幅下降（Chromium 85+） */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 .hit:hover, .hit.active { background: var(--hover); }
 .hit.active { outline: 1px solid var(--accent-soft); }
@@ -627,6 +630,7 @@ html, body {
   text-overflow: ellipsis;
 }
 .git-int { flex: none; width: 64px; height: 26px; }
+.git-branch-in { flex: none; width: 92px; height: 26px; font-size: 11px; padding: 1px 6px; }
 .git-sync { flex: 1; text-align: right; color: var(--text-dim); font-size: 11px; white-space: nowrap; }
 .git-err { color: var(--danger); font-weight: 600; cursor: help; }
 .git-add-row { margin-top: 6px; }

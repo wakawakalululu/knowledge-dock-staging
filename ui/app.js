@@ -631,7 +631,7 @@ function renderGitList() {
     <div class="git-row" data-name="${escapeHtml(r.name)}">
       <label class="root-en" title="启用/停用该源"><input type="checkbox" data-k="enabled" ${r.enabled ? "checked" : ""} /></label>
       <span class="git-name" title="${escapeHtml(r.url)}">${escapeHtml(r.name)}</span>
-      <span class="git-branch">${escapeHtml(r.branch || "默认")}</span>
+      <input class="set-input git-branch-in" data-k="branch" value="${escapeHtml(r.branch)}" placeholder="默认" title="分支名（改动后点「更新」自动重建克隆切换分支）" spellcheck="false" />
       <input class="set-input git-int" data-k="interval" type="number" min="0" step="5" value="${r.interval_min || 0}" title="间隔分钟，0=仅手动" />
       <span class="git-sync">${syncCell}</span>
       <button class="root-del" data-act="pull">更新</button>
@@ -992,6 +992,8 @@ if ($gitList) {
     if (!src) return;
     if (e.target.dataset.k === "interval") {
       src.interval_min = Math.max(0, Number(e.target.value) || 0);
+    } else if (e.target.dataset.k === "branch") {
+      src.branch = e.target.value.trim();
     } else if (e.target.dataset.k === "enabled") {
       src.enabled = e.target.checked;
     }

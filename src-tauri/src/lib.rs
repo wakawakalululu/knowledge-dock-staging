@@ -1526,7 +1526,7 @@ fn git_record_error(app: &AppHandle, name: &str, err: &str) {
 /// 对单个 git 源执行浅拉取并同步索引（手动与定时共用）
 /// 成功：更新 last_sync、清 last_error、保存配置、增量同步、emit index-updated
 fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
-    let (branch, dir) = {
+    let (branch, url, dir) = {
         let state: State<AppState> = app.state();
         let cfg = state.cfg.lock().expect("cfg lock");
         let src = cfg
@@ -1534,11 +1534,11 @@ fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
             .iter()
             .find(|s| s.name == name)
             .ok_or_else(|| format!("仓库不存在: {name}"))?;
-        (src.branch.clone(), repos_dir(app).join(&src.name))
+        (src.branch.clone(), src.url.clone(), repos_dir(app).join(&src.name))
     };
     let state: State<AppState> = app.state();
     let _guard = state.git_lock.lock().expect("git lock");
-    let msg = gitsync::pull_repo(&dir, &branch)?;
+    let msg = gitsync::pull_repo(&dir, &url, &branch)?;
     // 成功：更新时间戳并触发索引同步（在 git 锁外做引擎同步，避免长持锁）
     let stats = {
         let mut cfg = state.cfg.lock().expect("cfg lock");

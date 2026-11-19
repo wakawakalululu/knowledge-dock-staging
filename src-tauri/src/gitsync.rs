@@ -111,13 +111,24 @@ pub fn current_branch(dir: &Path) -> Result<String, String> {
 }
 
 /// 浅更新到远端最新（fetch --depth 1 + reset --hard + clean -fd）
-pub fn pull_repo(dir: &Path, branch: &str) -> Result<String, String> {
+/// 分支失配（单分支浅克隆无法直接 checkout 远端其它分支）→ 先克隆新分支到临时目录，成功后才替换旧克隆
+pub fn pull_repo(dir: &Path, url: &str, branch: &str) -> Result<String, String> {
     if !dir.join(".git").exists() {
         return Err(format!("目录不是 git 仓库: {}", dir.display()));
     }
     let branch = branch.trim();
     if branch.is_empty() {
         return Err("分支名为空".into());
+    }
+    let cur = current_branch(dir).unwrap_or_default();
+    if cur != branch {
+        let tmp = dir.with_extension("rebranch-tmp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        clone_repo(url, branch, &tmp).map_err(|e| format!("克隆分支 {branch} 失败: {e}"))?;
+        std::fs::remove_dir_all(dir).map_err(|e| format!("删除旧克隆失败: {e}"))?;
+        std::fs::rename(&tmp, &dir).map_err(|e| format!("替换克隆目录失败: {e}"))?;
+        let short = run(Some(dir), &["rev-parse", "--short", "HEAD"])?;
+        return Ok(format!("已切换分支 {branch}@{short}（重建克隆）"));
     }
     run(Some(dir), &["fetch", "--depth", "1", "origin", branch])?;
     run(Some(dir), &["reset", "--hard", "FETCH_HEAD"])?;
