@@ -1629,6 +1629,15 @@ async function healthPatrol() {
 
 /* 索引变更（文件监听触发）→ 统计即时刷新；重搜 trailing 防抖 1.5s
    （大库连续变更时 watcher 每轮都 emit，避免搜索风暴） */
+listen("pin-mode-changed", async () => {
+  // 托盘切换钉住：刷新内存 cfg 并应用（设置面板下次打开自然同步）
+  try {
+    cfg = await invoke("get_config");
+    applyPin();
+  } catch (e) {
+    console.error("钉住状态同步失败:", e);
+  }
+});
 listen("index-updated", (ev) => {
   const s = ev.payload;
   $stats.textContent = fmtStats(s);

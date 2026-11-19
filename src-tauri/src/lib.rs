@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -79,6 +79,35 @@ struct ContextResult {
 }
 
 /// 后台执行一次多根同步并推送统计
+/// 开机自启：HKCU Run 注册表项（零依赖，指向当前 exe）
+const AUTOSTART_RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+const AUTOSTART_NAME: &str = "KnowledgeDock";
+
+fn autostart_enabled() -> bool {
+    std::process::Command::new("reg")
+        .args(["query", AUTOSTART_RUN_KEY, "/v", AUTOSTART_NAME])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn set_autostart(enable: bool) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("取 exe 路径失败: {e}"))?;
+    let quoted = format!("\"{}\"", exe.to_string_lossy());
+    if enable {
+        std::process::Command::new("reg")
+            .args(["add", AUTOSTART_RUN_KEY, "/v", AUTOSTART_NAME, "/t", "REG_SZ", "/d", &quoted, "/f"])
+            .output()
+            .map_err(|e| format!("写入注册表失败: {e}"))?;
+    } else {
+        std::process::Command::new("reg")
+            .args(["delete", AUTOSTART_RUN_KEY, "/v", AUTOSTART_NAME, "/f"])
+            .output()
+            .map_err(|e| format!("删除注册表项失败: {e}"))?;
+    }
+    Ok(())
+}
+
 fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
     let roots = state.cfg.lock().expect("cfg lock").root_specs();
@@ -2287,17 +2316,54 @@ pub fn run() {
                 }
             }
 
-            // 系统托盘
-            let show = MenuItem::with_id(&handle, "show", "显示窗口", true, None::<&str>)?;
+            // 系统托盘（右键菜单：窗口/钉住/重扫/自启/配置目录/接口状态/退出）
+            let show_hide = MenuItem::with_id(&handle, "show-hide", "显示/隐藏窗口", true, None::<&str>)?;
+            let pin = CheckMenuItem::with_id(&handle, "pin", "钉住模式（常驻显示）", true, cfg.pin_mode, None::<&str>)?;
+            let rescan = MenuItem::with_id(&handle, "rescan", "重新扫描索引", true, None::<&str>)?;
+            let sep1 = PredefinedMenuItem::separator(&handle)?;
+            let autostart = CheckMenuItem::with_id(&handle, "autostart", "开机自启", true, autostart_enabled(), None::<&str>)?;
+            let open_cfg = MenuItem::with_id(&handle, "open-cfg", "打开配置目录", true, None::<&str>)?;
+            let api_state_text = if cfg.api.enabled {
+                format!("HTTP 接口 :{}（重启后生效修改）", cfg.api.port)
+            } else {
+                "HTTP 接口已关闭".to_string()
+            };
+            let api_info = MenuItem::with_id(&handle, "api-info", &api_state_text, false, None::<&str>)?;
+            let sep2 = PredefinedMenuItem::separator(&handle)?;
             let quit = MenuItem::with_id(&handle, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(&handle, &[&show, &quit])?;
+            let menu = Menu::with_items(&handle, &[&show_hide, &pin, &rescan, &sep1, &autostart, &open_cfg, &api_info, &sep2, &quit])?;
             TrayIconBuilder::with_id("kd-tray")
                 .icon(handle.default_window_icon().expect("app icon").clone())
                 .tooltip("知识悬浮搜索")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
-                    "show" => reveal(app),
+                    "show-hide" => toggle_visible(app),
+                    "pin" => {
+                        let state: State<AppState> = app.state();
+                        let (new_pin, cfg_snapshot) = {
+                            let mut c = state.cfg.lock().expect("cfg lock");
+                            c.pin_mode = !c.pin_mode;
+                            (c.pin_mode, c.clone())
+                        };
+                        config::save(app, &cfg_snapshot);
+                        let _ = app.emit("pin-mode-changed", new_pin);
+                    }
+                    "rescan" => {
+                        sync_and_emit(app);
+                    }
+                    "autostart" => {
+                        let enable = !autostart_enabled();
+                        let ok = set_autostart(enable).is_ok();
+                        if ok {
+                            let _ = app.emit("autostart-changed", enable);
+                        }
+                    }
+                    "open-cfg" => {
+                        if let Ok(dir) = app.path().app_config_dir() {
+                            let _ = std::process::Command::new("explorer").arg(dir.to_string_lossy().to_string()).spawn();
+                        }
+                    }
                     "quit" => {
                         save_position_final(app);
                         app.exit(0);
