@@ -6,6 +6,7 @@
 
 pub mod ai;
 pub mod apps;
+pub mod http_api;
 pub mod config;
 pub mod matching;
 pub mod scope;
@@ -2256,6 +2257,7 @@ pub fn run() {
             let engine = Arc::new(Engine::open_or_create(&data_dir.join("index"), synonyms, stopwords)?);
 
             // 先注册全局状态（后续 setup 内的所有 state() 访问都依赖它）
+            let engine_for_api = engine.clone();
             app.manage(AppState {
                 engine,
                 cfg: Mutex::new(cfg.clone()),
@@ -2265,6 +2267,11 @@ pub fn run() {
                 webdav_lock: Mutex::new(()),
                 apps_cache: Mutex::new(None),
             });
+
+            // 本地 HTTP 检索接口（供其它程序调用；端口/token 在 config.api，改动需重启）
+            if cfg.api.enabled {
+                http_api::spawn(engine_for_api, cfg.api.port, cfg.api.token.clone());
+            }
 
             // 恢复窗口位置与宽度（越界则保持默认居中）
             if let Some(win) = handle.get_webview_window("main") {

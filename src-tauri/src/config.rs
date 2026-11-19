@@ -123,6 +123,28 @@ pub struct Config {
     /// AI 引擎（OpenAI 兼容接口；默认关闭，未启用时全部静默回退 BM25）
     #[serde(default)]
     pub ai: AiConfig,
+    /// 本地 HTTP 检索接口（供其它程序调用；仅绑定 127.0.0.1）
+    #[serde(default = "default_api")]
+    pub api: ApiConfig,
+}
+
+/// 本地 HTTP 接口配置（改端口/开关后需重启应用生效）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiConfig {
+    /// 默认启用（仅监听 127.0.0.1，不暴露局域网）
+    #[serde(default = "default_api_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_api_port")]
+    pub port: u16,
+    /// 访问令牌；空 = 不鉴权（仅本机可达）
+    #[serde(default)]
+    pub token: String,
+}
+
+fn default_api_enabled() -> bool { true }
+fn default_api_port() -> u16 { 18230 }
+fn default_api() -> ApiConfig {
+    ApiConfig { enabled: default_api_enabled(), port: default_api_port(), token: String::new() }
 }
 
 /// AI 引擎配置（Phase 1：结果筛选/重排）
@@ -289,6 +311,7 @@ impl Default for Config {
             webdav_sources: Vec::new(),
             scope_usage: HashMap::new(),
             ai: AiConfig::default(),
+            api: ApiConfig { enabled: true, port: 18230, token: String::new() },
         }
     }
 }
