@@ -31,7 +31,13 @@ pub fn spawn(app: tauri::AppHandle, engine: Arc<Engine>, port: u16, token: Strin
                     let engine = engine.clone();
                     let token = token.clone();
                     std::thread::spawn(move || {
-                        let _ = handle(s, app, engine, token);
+                        // handler panic 不拖垮进程（连接断开，服务继续）
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let _ = handle(s, app, engine, token);
+                        }));
+                        if r.is_err() {
+                            crate::kdlog!(error, "api", "请求处理线程 panic，连接已断开");
+                        }
                     });
                 }
                 Err(_) => continue,

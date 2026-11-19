@@ -652,6 +652,14 @@ impl Engine {
                 .filter(|s| !s.is_empty())
                 .collect();
             if toks.is_empty() { continue; }
+            if toks.len() == 1 {
+                // PhraseQuery 要求 >1 term：单词短语退化为 TermQuery
+                clauses.push((Occur::Should, Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.content, &toks[0]), IndexRecordOption::Basic))));
+                clauses.push((Occur::Should, Box::new(BoostQuery::new(Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.title, &toks[0]), IndexRecordOption::Basic)), 2.0))));
+                continue;
+            }
             let term_toks: Vec<tantivy::Term> = toks.iter()
                 .map(|s| tantivy::Term::from_field_text(self.fields.content, s))
                 .collect();
