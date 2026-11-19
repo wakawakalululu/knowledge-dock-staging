@@ -820,3 +820,24 @@ html, body {
   color: var(--accent);
   border: 1px solid var(--accent-soft);
 }
+
+
+/* R42：树状折叠 */
+.fold-caret {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.fold-n {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.child-hit {
+  margin-left: 22px;
+}

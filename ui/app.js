@@ -19,6 +19,7 @@ const $q = document.getElementById("q");
 const $bar = document.getElementById("bar");
 const $btnClear = document.getElementById("btn-clear");
 const $btnAi = document.getElementById("btn-ai");
+const $btnFold = document.getElementById("btn-fold");
 const $aiEnabled = document.getElementById("ai-enabled");
 const $aiBaseUrl = document.getElementById("ai-base-url");
 const $aiKey = document.getElementById("ai-key");
@@ -65,6 +66,8 @@ let rootFilter = "all";   // 库范围：all | 根显示名（下沉引擎）
 let visible = [];         // 统一可见列表：应用条目 {kind:'app',name,path} 在前，命中条目 {kind:'hit',h,i} 在后
 let appHits = [];         // 应用搜索结果（开始菜单 .lnk，第一层）
 let aiOn = false;         // AI 精选开关（本次结果内）
+let foldOn = localStorage.getItem("kd-fold") !== "0"; // 树状折叠开关（默认开）
+let foldExpanded = new Set(); // 已展开的文件路径集合
 let aiKeep = null;        // AI 保留的命中原始下标集合（Set<number>）
 let searchLimit = 50;     // 当前搜索结果上限（分页递增）
 const MAX_RESULTS = 500;  // 结果渲染硬上限：到顶提示细化条件，防 DOM 无限增长
@@ -279,13 +282,45 @@ function hitDetailHtml(h, i, query) {
 function render(query) {
   let hitItems = filteredHits();
   if (aiOn && aiKeep) hitItems = hitItems.filter((it) => aiKeep.has(it.i));
-  visible = appHits
-    .map((a) => ({ kind: "app", name: a.name, path: a.path }))
-    .concat(hitItems);
-  $resCount.textContent =
-    (aiOn && aiKeep ? "AI精选 · " : "") +
-    (appHits.length ? `${appHits.length} 应用 · ` : "") +
-    (hitItems.length ? `${hitItems.length} 条结果` : "");
+  if (foldOn) {
+    // 树状折叠：同文件多块合并为一行（rep = BM25 最优块），展开的文件插入子命中行
+    const groups = new Map();
+    const order = [];
+    for (const it of hitItems) {
+      const key = it.h.path;
+      if (!groups.has(key)) {
+        groups.set(key, { rep: it, children: [] });
+        order.push(key);
+      } else {
+        groups.get(key).children.push(it);
+      }
+    }
+    const folded = [];
+    for (const key of order) {
+      const g = groups.get(key);
+      folded.push({ kind: "fold-rep", g, path: key });
+      if (foldExpanded.has(key)) {
+        for (const ch of g.children) folded.push({ kind: "hit", h: ch.h, i: ch.i, _child: true });
+      }
+    }
+    visible = appHits
+      .map((a) => ({ kind: "app", name: a.name, path: a.path }))
+      .concat(folded);
+  } else {
+    visible = appHits
+      .map((a) => ({ kind: "app", name: a.name, path: a.path }))
+      .concat(hitItems);
+  }
+  {
+    const fileN = visible.filter((x) => x.kind === "fold-rep").length;
+    const mid = (aiOn && aiKeep ? "AI精选 · " : "") +
+      (appHits.length ? `${appHits.length} 应用 · ` : "");
+    if (foldOn) {
+      $resCount.textContent = mid + (fileN ? `${fileN} 文件 · ${hitItems.length} 条命中` : "");
+    } else {
+      $resCount.textContent = mid + (hitItems.length ? `${hitItems.length} 条结果` : "");
+    }
+  }
   if (!visible.length) {
     const anyHits = hits.length > 0;
     $resList.innerHTML =
@@ -322,9 +357,55 @@ function render(query) {
         </button>
       </div>`;
       }
+      if (item.kind === "fold-rep") {
+        const g = item.g;
+        const expanded = foldExpanded.has(item.path);
+        const fh = g.rep.h;
+        const fi = g.rep.i;
+        const badge = TYPE_LABEL[fh.doc_type]
+          ? `<span class="badge badge-${fh.doc_type.toLowerCase()}">${TYPE_LABEL[fh.doc_type]}</span>`
+          : "";
+        const rootTag = fh.root
+          ? `<span class="hit-root">${escapeHtml(fh.root)}</span>`
+          : "";
+        const mt = fh.mtime
+          ? `<span class="hit-mtime" title="mtime=${fh.mtime}">${escapeHtml(relTime(Math.floor(fh.mtime / 1000)))}</span>`
+          : `<span class="hit-mtime" title="mtime=MISSING"></span>`;
+        const head =
+          sortMode === "group" && fh.root !== prevRoot
+            ? `<div class="group-head">${escapeHtml(fh.root || "未分库")} · ${groupCounts.get(fh.root) || 0} 条</div>`
+            : "";
+        prevRoot = fh.root;
+        const detail =
+          pos === active
+            ? `<div class="hit-detail">${hitDetailHtml(fh, fi, query)}</div>`
+            : "";
+        return head + `
+      <div class="hit fold-rep ${pos === active ? "active" : ""}" data-pos="${pos}">
+        <div class="hit-top">
+          <span class="fold-caret">${expanded ? "▾" : "▸"}</span>
+          ${badge}
+          <span class="hit-title">${highlight(fh.title, query)}</span>
+          ${rootTag}
+          <span class="hit-path" title="${escapeHtml(fh.abs)}">${escapeHtml(shortPath(fh.path))}</span>
+          <span class="fold-n">${g.children.length + 1} 块</span>
+          ${mt}
+          <button class="ctx-btn act-copy" data-abs="${escapeHtml(fh.abs)}" title="复制完整路径">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </button>
+          <button class="ctx-btn act-reveal" data-abs="${escapeHtml(fh.abs)}" title="在资源管理器中显示">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M2 8h20"/></svg>
+          </button>
+          <button class="ctx-btn act-open" data-abs="${escapeHtml(fh.abs)}" title="用默认程序打开">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
+          </button>
+        </div>
+        ${detail}
+      </div>`;
+      }
       const { h, i } = item;
       const head =
-        sortMode === "group" && h.root !== prevRoot
+        sortMode === "group" && h.root !== prevRoot && !item._child
           ? `<div class="group-head">${escapeHtml(h.root || "未分库")} · ${groupCounts.get(h.root) || 0} 条</div>`
           : "";
       prevRoot = h.root;
@@ -343,7 +424,7 @@ function render(query) {
           ? `<div class="hit-detail">${hitDetailHtml(h, i, query)}</div>`
           : "";
       return head + `
-      <div class="hit ${pos === active ? "active" : ""}" data-pos="${pos}">
+      <div class="hit ${item._child ? "child-hit " : ""}${pos === active ? "active" : ""}" data-pos="${pos}">
         <div class="hit-top">
           ${badge}
           <span class="hit-title">${highlight(h.title, query)}</span>
@@ -382,10 +463,6 @@ function render(query) {
   });
 
 
-  // 当前显示模式随计数一起展示（便于确认切换是否生效）
-  $resCount.textContent = visible.length
-    ? `${visible.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode}`
-    : "";
   // 上下文展开按钮（阻止冒泡，不触发打开文件）
   // 无限滚动：结果列表滚动到底部附近自动追加下一批（替代手动按钮）
   $resList.addEventListener("scroll", () => {
@@ -486,10 +563,12 @@ function setActive(pos) {
   if (el) {
     el.classList.add("active");
     const item = visible[pos];
-    if (item && item.kind === "hit") {
+    if (item && (item.kind === "hit" || item.kind === "fold-rep")) {
+      const hh = item.kind === "fold-rep" ? item.g.rep.h : item.h;
+      const ii = item.kind === "fold-rep" ? item.g.rep.i : item.i;
       const wrap = document.createElement("div");
       wrap.className = "hit-detail";
-      wrap.innerHTML = hitDetailHtml(item.h, item.i, lastQuery);
+      wrap.innerHTML = hitDetailHtml(hh, ii, lastQuery);
       el.appendChild(wrap);
     }
     el.scrollIntoView({ block: "nearest" });
@@ -583,9 +662,14 @@ async function doSearch() {
   // 曾导致"输入后搜索在后台跑但界面无反应"）
   updateView();
   if (r.duration_ms) {
+    const fileN = foldOn ? visible.filter((x) => x.kind === "fold-rep").length : 0;
+    const body = foldOn
+      ? `${fileN} 文件 · ${hits.length} 条命中`
+      : `${hits.length} 条结果`;
     $resCount.textContent =
+      (aiOn && aiKeep ? "AI精选 · " : "") +
       (appHits.length ? `${appHits.length} 应用 · ` : "") +
-      `${hits.length} 条结果 · ${SORT_LABEL[sortMode] || sortMode} · ${r.duration_ms}ms`;
+      body + ` · ${SORT_LABEL[sortMode] || sortMode} · ${r.duration_ms}ms`;
   }
   // 返回满页说明可能还有更多结果 → 底部显示"滚动加载"提示（替代手动按钮）
   if (hits.length >= searchLimit) {
@@ -637,6 +721,16 @@ async function toggleAiFilter() {
   updateAiBtn();
 }
 if ($btnAi) $btnAi.addEventListener("click", toggleAiFilter);
+if ($btnFold) {
+  $btnFold.classList.toggle("active", foldOn);
+  $btnFold.addEventListener("click", () => {
+    foldOn = !foldOn;
+    foldExpanded.clear();
+    localStorage.setItem("kd-fold", foldOn ? "1" : "0");
+    $btnFold.classList.toggle("active", foldOn);
+    render(lastQuery);
+  });
+}
 
 function clearInput() {
   $q.value = "";
@@ -660,6 +754,21 @@ function openHit(pos, reveal) {
     invoke(reveal ? "reveal_file" : "launch_app", { path: item.path }).catch((e) =>
       console.error("启动失败:", e)
     );
+    return;
+  }
+  if (item.kind === "fold-rep") {
+    if (reveal) {
+      // 定位/打开该文件
+      invoke(reveal ? "reveal_file" : "open_file", { path: item.g.rep.h.abs }).catch((e) =>
+        console.error("打开失败:", e)
+      );
+      return;
+    }
+    // 树状语义：Enter/单击 = 展开/收起该文件的子命中
+    const p = item.path;
+    if (foldExpanded.has(p)) foldExpanded.delete(p);
+    else foldExpanded.add(p);
+    render(lastQuery);
     return;
   }
   invoke(reveal ? "reveal_file" : "open_file", { path: item.h.abs }).catch((e) =>
