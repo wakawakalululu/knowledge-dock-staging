@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, Occur, QueryParser, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, Occur, PhraseQuery, QueryParser, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions, Value,
 };
@@ -553,8 +553,8 @@ impl Engine {
         StatsDetail { by_type, by_root, total_docs: total }
     }
 
-    /// BM25 检索：分词 → 停用词 → 同义词展开 → 标题/面包屑加权
-    /// type_filter/root_filter：范围限定（Some 时以 Must 子句下沉到引擎）
+    /// BM25 检索 + 高级语法：短语/与或非/字段限定/时间窗
+    /// type_filter/root_filter：显式参数（chips/HTTP）优先级低于查询内语法
     pub fn search(
         &self,
         query: &str,
@@ -566,10 +566,16 @@ impl Engine {
         if q.is_empty() {
             return SearchResponse { hits: Vec::new(), terms: Vec::new(), duration_ms: 0 };
         }
+        let adv = parse_advanced(q);
 
-        // 1. jieba 分词 + 词元清洗：仅保留字母数字（和数字上下文的 . -），剔除中英文标点
+        // 语法显式限定覆盖 chips/HTTP 参数
+        let type_filter = adv.type_f.as_deref().or(type_filter);
+        let root_filter = adv.root_f.as_deref().or(root_filter);
+
+        // 1. 普通词（jieba 分词 + 词元清洗 + 停用词 + 同义词展开；现状流程）
+        let normal_src = adv.normal.join(" ");
         let mut terms: Vec<String> = Vec::new();
-        for t in self.jieba.cut(q, false) {
+        for t in self.jieba.cut(&normal_src, false) {
             let cleaned: String = t
                 .chars()
                 .filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-')
@@ -592,14 +598,9 @@ impl Engine {
         if !filtered.is_empty() {
             terms = filtered;
         }
-        if terms.is_empty() {
-            return SearchResponse { hits: Vec::new(), terms: Vec::new(), duration_ms: 0 };
-        }
-
-        // 2. 同义词展开（零网络、零模型，纯静态词典）
-        //    除分词结果外，原始整串查询也参与词典查找（口语词可能被 jieba 拆散）
+        // 3. 同义词展开（普通词 + 原始整串参与词典查找）
         let dict = self.synonyms.lock().expect("syn lock");
-        let ql_raw = q.to_lowercase();
+        let ql_raw = normal_src.to_lowercase();
         let mut effective: Vec<String> = Vec::new();
         let mut lookup_keys: Vec<String> = terms.clone();
         if !lookup_keys.contains(&ql_raw) {
@@ -620,27 +621,20 @@ impl Engine {
         }
         drop(dict);
 
-        // 4. 构造查询：默认 OR 语义（同义词展开按用户设计为并集，BM25 负责排序）
-        //    解析器已缓存，无需每次按键重建
-        let title_q = build(&self.parsers.title, &effective);
-        let content_q = build(&self.parsers.content, &effective);
-        let bc_q = build(&self.parsers.breadcrumbs, &effective);
+        // 4. 构造查询
         let mut clauses: Vec<(Occur, Box<dyn tantivy::query::Query>)> = Vec::new();
-        // 范围限定：Must 子句在候选集阶段即收窄（Top50 不会被其他范围的结果挤占）
         if let Some(t) = type_filter {
             let term = Term::from_field_text(self.fields.doc_type, t);
-            clauses.push((
-                Occur::Must,
-                Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
-            ));
+            clauses.push((Occur::Must, Box::new(TermQuery::new(term, IndexRecordOption::Basic))));
         }
         if let Some(r) = root_filter {
             let term = Term::from_field_text(self.fields.root, r);
-            clauses.push((
-                Occur::Must,
-                Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
-            ));
+            clauses.push((Occur::Must, Box::new(TermQuery::new(term, IndexRecordOption::Basic))));
         }
+        // 普通词（OR，三字段加权）——现状语义
+        let title_q = build(&self.parsers.title, &effective);
+        let content_q = build(&self.parsers.content, &effective);
+        let bc_q = build(&self.parsers.breadcrumbs, &effective);
         if let Some(q) = title_q {
             clauses.push((Occur::Should, Box::new(BoostQuery::new(q, 2.0))));
         }
@@ -650,17 +644,83 @@ impl Engine {
         if let Some(q) = content_q {
             clauses.push((Occur::Should, q));
         }
+        // 高级语法：短语（不清洗，jieba 分词后三字段 PhraseQuery，Should 加权）
+        for ph in &adv.phrases {
+            let toks: Vec<String> = self.jieba.cut(ph, false)
+                .into_iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if toks.is_empty() { continue; }
+            let term_toks: Vec<tantivy::Term> = toks.iter()
+                .map(|s| tantivy::Term::from_field_text(self.fields.content, s))
+                .collect();
+            clauses.push((Occur::Should, Box::new(PhraseQuery::new(term_toks))));
+            let tt: Vec<tantivy::Term> = toks.iter()
+                .map(|s| tantivy::Term::from_field_text(self.fields.title, s))
+                .collect();
+            clauses.push((Occur::Should, Box::new(BoostQuery::new(Box::new(PhraseQuery::new(tt)), 2.0))));
+        }
+        // +必须词（Must，三字段）
+        for m in &adv.must {
+            let toks: Vec<String> = self.jieba.cut(m, false)
+                .into_iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            for t in &toks {
+                clauses.push((Occur::Must, Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.content, t), IndexRecordOption::Basic))));
+                clauses.push((Occur::Must, Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.title, t), IndexRecordOption::Basic))));
+            }
+        }
+        // -排除词（MustNot，content+title）
+        for n in &adv.not {
+            let toks: Vec<String> = self.jieba.cut(n, false)
+                .into_iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            for t in &toks {
+                clauses.push((Occur::MustNot, Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.content, t), IndexRecordOption::Basic))));
+                clauses.push((Occur::MustNot, Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.title, t), IndexRecordOption::Basic))));
+            }
+        }
+        // title:xxx（Must，仅标题字段）
+        for t in &adv.title {
+            let toks: Vec<String> = self.jieba.cut(t, false)
+                .into_iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            for tok in &toks {
+                clauses.push((Occur::Must, Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.title, tok), IndexRecordOption::Basic))));
+            }
+        }
         if clauses.is_empty() {
             return SearchResponse { hits: Vec::new(), terms: effective, duration_ms: 0 };
         }
         let query = BooleanQuery::new(clauses);
 
-        // 5. 检索
+        // 5. 检索（path/mtime 后过滤时放大检索量补偿）
+        let need_post = !adv.path.is_empty() || adv.mtime_after_days.is_some() || adv.mtime_before_days.is_some();
+        let search_limit = if need_post { limit.saturating_mul(4).max(100) } else { limit };
         let searcher = self.reader.searcher();
-        let top = match searcher.search(&query, &TopDocs::with_limit(limit)) {
+        let top = match searcher.search(&query, &TopDocs::with_limit(search_limit)) {
             Ok(t) => t,
             Err(_) => return SearchResponse { hits: Vec::new(), terms: effective, duration_ms: 0 },
         };
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let after_cutoff = adv.mtime_after_days.map(|d| now_ms.saturating_sub(d * 86_400_000));
+        let before_cutoff = adv.mtime_before_days.map(|d| now_ms.saturating_sub(d * 86_400_000));
 
         let mut hits = Vec::new();
         for (score, addr) in top {
@@ -687,6 +747,15 @@ impl Engine {
             } else {
                 breadcrumbs.split(" > ").map(|s| s.to_string()).collect()
             };
+            let mtime = crate::indexer::mtime_ms(std::path::Path::new(&abs));
+            // path:/mtime: 后过滤
+            if let Some(f) = after_cutoff { if mtime < f { continue; } }
+            if let Some(f) = before_cutoff { if mtime > f { continue; } }
+            if !adv.path.is_empty() {
+                let rel_l = rel.to_lowercase();
+                let abs_l = abs.to_lowercase();
+                if !adv.path.iter().any(|v| rel_l.contains(v) || abs_l.contains(v)) { continue; }
+            }
             hits.push(Hit {
                 path: rel,
                 title,
@@ -695,13 +764,100 @@ impl Engine {
                 root,
                 snippet: make_snippet(&content, &effective),
                 line,
-                mtime: crate::indexer::mtime_ms(std::path::Path::new(&abs)),
+                mtime,
                 abs,
                 score,
             });
+            if hits.len() >= limit { break; }
         }
         SearchResponse { hits, terms: effective, duration_ms: 0 }
     }
+}
+
+/// 高级语法解析："短语" / +必须 / -排除 / title: path: type: root: mtime:>Nd|<Nd / 普通词
+#[derive(Default, Debug)]
+pub struct Advanced {
+    pub normal: Vec<String>,
+    pub phrases: Vec<String>,
+    pub must: Vec<String>,
+    pub not: Vec<String>,
+    pub title: Vec<String>,
+    pub path: Vec<String>,
+    pub type_f: Option<String>,
+    pub root_f: Option<String>,
+    pub mtime_after_days: Option<u64>,
+    pub mtime_before_days: Option<u64>,
+}
+
+fn map_doc_type(v: &str) -> Option<String> {
+    match v.to_lowercase().as_str() {
+        "law" | "法律" => Some("Law".into()),
+        "manual" | "文档" | "手册" => Some("Manual".into()),
+        "qa" | "问答" => Some("QA".into()),
+        "note" | "笔记" => Some("Note".into()),
+        _ => None,
+    }
+}
+
+pub fn parse_advanced(raw: &str) -> Advanced {
+    let mut a = Advanced::default();
+    let bytes_len = raw.len();
+    let mut i = 0;
+    while i < bytes_len {
+        let c = raw[i..].chars().next().unwrap();
+        if c.is_whitespace() {
+            i += c.len_utf8();
+            continue;
+        }
+        if c == '"' {
+            match raw[i + 1..].find('"') {
+                Some(off) => {
+                    let s = raw[i + 1..i + 1 + off].trim().to_string();
+                    if !s.is_empty() { a.phrases.push(s); }
+                    i = i + 1 + off + 1;
+                }
+                None => {
+                    let s = raw[i + 1..].trim().to_string();
+                    if !s.is_empty() { a.phrases.push(s); }
+                    i = bytes_len;
+                }
+            }
+            continue;
+        }
+        let end = raw[i..].find(char::is_whitespace).map(|p| i + p).unwrap_or(bytes_len);
+        let tok = raw[i..end].trim().to_string();
+        i = end;
+        if tok.is_empty() { continue; }
+        let lower = tok.to_lowercase();
+        if let Some(v) = lower.strip_prefix("title:") {
+            if !v.is_empty() { a.title.push(v.to_string()); continue; }
+        }
+        if let Some(v) = lower.strip_prefix("path:") {
+            if !v.is_empty() { a.path.push(v.to_string()); continue; }
+        }
+        if let Some(v) = lower.strip_prefix("type:") {
+            if let Some(mapped) = map_doc_type(v) { a.type_f = Some(mapped); continue; }
+        }
+        if let Some(v) = lower.strip_prefix("root:") {
+            if !v.is_empty() { a.root_f = Some(v.to_string()); continue; }
+        }
+        if let Some(v) = lower.strip_prefix("mtime:") {
+            if let Some(d) = v.strip_prefix('>') {
+                if let Ok(n) = d.trim_end_matches("d").parse::<u64>() { a.mtime_after_days = Some(n); continue; }
+            }
+            if let Some(d) = v.strip_prefix('<') {
+                if let Ok(n) = d.trim_end_matches("d").parse::<u64>() { a.mtime_before_days = Some(n); continue; }
+            }
+        }
+        if let Some(v) = tok.strip_prefix('+') {
+            if !v.is_empty() { a.must.push(v.to_string()); continue; }
+        }
+        if let Some(v) = tok.strip_prefix('-') {
+            if !v.is_empty() { a.not.push(v.to_string()); continue; }
+        }
+        a.normal.push(tok);
+    }
+    a
 }
 
 /// 用同义词展开后的词表构造单字段 OR 查询（解析失败时逐词加引号兜底）

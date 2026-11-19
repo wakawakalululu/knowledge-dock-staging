@@ -126,6 +126,9 @@ pub struct Config {
     /// 本地 HTTP 检索接口（供其它程序调用；仅绑定 127.0.0.1）
     #[serde(default = "default_api")]
     pub api: ApiConfig,
+    /// 展开态窗口高度（可拖拽调整；Resized 事件自动记忆）
+    #[serde(default = "default_expanded_h")]
+    pub expanded_h: f64,
 }
 
 /// 本地 HTTP 接口配置（改端口/开关后需重启应用生效）
@@ -143,6 +146,7 @@ pub struct ApiConfig {
 
 fn default_api_enabled() -> bool { true }
 fn default_api_port() -> u16 { 18230 }
+fn default_expanded_h() -> f64 { 600.0 }
 fn default_api() -> ApiConfig {
     ApiConfig { enabled: default_api_enabled(), port: default_api_port(), token: String::new() }
 }
@@ -319,6 +323,7 @@ impl Default for Config {
             scope_usage: HashMap::new(),
             ai: AiConfig::default(),
             api: ApiConfig { enabled: true, port: 18230, token: String::new() },
+            expanded_h: 600.0,
         }
     }
 }

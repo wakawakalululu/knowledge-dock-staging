@@ -36,7 +36,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// 折叠（仅搜索框）/ 展开（含结果面板）的窗口逻辑高度
 const COLLAPSED_H: f64 = 76.0;
-const EXPANDED_H: f64 = 600.0;
 
 struct AppState {
     engine: Arc<Engine>,
@@ -282,8 +281,9 @@ fn save_config(app: AppHandle, cfg: Config, state: State<'_, AppState>) -> Resul
 /// 采用动态调高代替固定大窗+局部穿透）
 #[tauri::command]
 fn ui_mode(app: AppHandle, mode: String, state: State<'_, AppState>) {
-    let width = state.cfg.lock().expect("cfg lock").width;
-    let height = if mode == "expanded" { EXPANDED_H } else { COLLAPSED_H };
+    let cfg = state.cfg.lock().expect("cfg lock").clone();
+    let width = cfg.width;
+    let height = if mode == "expanded" { cfg.expanded_h.clamp(200.0, 1400.0) } else { COLLAPSED_H };
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.set_size(tauri::LogicalSize::new(width, height));
         clamp_into_monitor(&app);
@@ -2491,6 +2491,20 @@ pub fn run() {
                 }
             }
             WindowEvent::Moved(pos) => {
+                save_position_throttled(window.app_handle(), pos.x, pos.y);
+            }
+            WindowEvent::Resized(size) => {
+                // 拖拽调整窗口尺寸：展开态记忆宽/高（节流落盘），折叠态仅记忆宽
+                let state: State<AppState> = window.app_handle().state();
+                let expanded = size.height > (COLLAPSED_H + 50.0) as u32;
+                {
+                    let mut c = state.cfg.lock().expect("cfg lock");
+                    c.width = (size.width as f64 / window.scale_factor().unwrap_or(1.0)).clamp(320.0, 1600.0);
+                    if expanded {
+                        c.expanded_h = (size.height as f64 / window.scale_factor().unwrap_or(1.0)).clamp(200.0, 1400.0);
+                    }
+                }
+                let pos = window.outer_position().unwrap_or_default();
                 save_position_throttled(window.app_handle(), pos.x, pos.y);
             }
             _ => {}
