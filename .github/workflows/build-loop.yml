@@ -1,0 +1,68 @@
+name: build-loop
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-loop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify versions and lockfiles
+        run: |
+          node tools/check-versions.js
+          cargo metadata --manifest-path src-tauri/Cargo.toml --locked --no-deps --format-version 1 > $null
+          npm ci --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Generate icons
+        run: |
+          node scripts/gen-icon.mjs
+          npx tauri icon scripts/app-icon.png -o src-tauri/icons
+
+      - name: Build dev-release
+        run: npm run build:loop
+
+      - name: Collect loop artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item src-tauri/target/dev-release/knowledge-dock.exe dist/knowledge-dock-portable.exe
+          Copy-Item src-tauri/target/dev-release/bundle/nsis/*.exe dist/
+
+      - name: Upload loop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: knowledge-dock-windows-loop
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7

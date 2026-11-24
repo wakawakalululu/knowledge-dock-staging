@@ -72,6 +72,18 @@ screenshots/            README 运行截图（实机）
 
 任何一步失败：回到 1；**禁止"改了没验证就宣称完成"**。
 
+Rust 云端构建闭环脚手架位于 `.claude/skills/rust-ci-dev-loop/`：
+
+```bash
+bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh precheck
+# 提交后从 agent/* 分支推送 HEAD 到 staging:staging
+bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh watch
+bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-dock-windows-loop knowledge-dock-portable.exe 60
+```
+
+`precheck` 未返回 0 前禁止 push；每轮结果必须追加到 `.agent-loop/history.md`。
+`build-loop.yml` 使用 `[profile.dev-release]` 保留符号/行号，产物仍只上传到 staging Actions。
+
 ## 5. 版本与发布规则
 
 - 版本号**三处同步**（缺一不可）：
@@ -133,6 +145,8 @@ screenshots/            README 运行截图（实机）
 | `raw.githubusercontent.com` 本地 SSL 失败 | 代理环境 | GitHub 内容验证一律走 `api.github.com` |
 | 默认 GCM 弹窗中断自动化 | 交互式认证 | `GIT_TERMINAL_PROMPT=0` 仅用于诊断，不作为修复 |
 | 远程 shell 执行 `git` / `node` / `cargo` 提示 `command not found` | WSL PATH 未包含 Windows 工具目录 | 用绝对路径调用 `C:\Program Files\Git\cmd\git.exe`、`C:\Program Files\nodejs\node.exe` 与已安装 toolchain 的 `cargo.exe` |
+| Windows `git` / `node` 收到 `/mnt/c/...` 后找不到文件 | WSL 路径不会自动转换为 Windows 路径 | 参数统一经 `wslpath -w`；命令替换里的失败先赋值再使用，避免被外层 `echo` 掩盖 |
+| MSYS2 `bash -lc` 丢失 WSL 传入的仓库路径变量 | Windows 登录 shell 未保留该环境变量 | 用 `printf %q` 编码 MSYS 路径后嵌入命令，不依赖跨进程自定义变量 |
 | WSL 直接启动 Windows `cargo` 时 `collect2: ld returned 53` | Windows 子进程 PATH 被缩成 `C:\Windows\System32`，找不到 MSYS2 `ld/as` | 通过 `C:\msys64\usr\bin\bash.exe -lc` 进入 MSYS2，加入 `/c/msys64/ucrt64/bin` 后再执行 `cargo check` |
 | 本地 `cargo check` 报 `src-tauri/icons/icon.ico` not found | 图标按约定不入库，CI 会动态生成 | 先 `npm ci`，再 `node scripts/gen-icon.mjs` 与 `node node_modules/@tauri-apps/cli/tauri.js icon scripts/app-icon.png -o src-tauri/icons` |
 | `cargo test` 编译成功后测试 exe 报 `STATUS_ENTRYPOINT_NOT_FOUND` | 测试可执行文件在主机运行时启动失败，尚未进入断言 | 用 `ldd` / `objdump` 排查 MSYS2 DLL；未解决前不得宣称单测通过，以 CI 构建结果作为独立验证 |

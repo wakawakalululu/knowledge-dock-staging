@@ -169,6 +169,7 @@ npm run tauri build    # 或直接推送到 GitHub，由 Actions 构建并发布
 ```
 
 - CI（GitHub Actions，windows-latest/MSVC）：push 自动构建 portable + NSIS 安装包并上传 artifact；推送 `v*` tag 自动创建 GitHub Release
+- Rust 云端闭环：`.github/workflows/build-loop.yml` 在 staging 推送后构建保留符号的 `dev-release` 产物；驱动脚本为 `.claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh`，依次执行 `precheck`、`watch`、`fetch_run`，历史记录写入 `.agent-loop/history.md`
 - 本地开发：rustup stable-gnu + MSYS2 ucrt 工具链（详见 `src-tauri/.cargo/config.toml`），`cargo check` 快速类型检查
 
 ## 工程基线与协作
