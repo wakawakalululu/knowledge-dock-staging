@@ -171,6 +171,13 @@ npm run tauri build    # 或直接推送到 GitHub，由 Actions 构建并发布
 - CI（GitHub Actions，windows-latest/MSVC）：push 自动构建 portable + NSIS 安装包并上传 artifact；推送 `v*` tag 自动创建 GitHub Release
 - 本地开发：rustup stable-gnu + MSYS2 ucrt 工具链（详见 `src-tauri/.cargo/config.toml`），`cargo check` 快速类型检查
 
+## 工程基线与协作
+
+- **[`BASELINE.md`](BASELINE.md)**：权威工程基线——开发环境、迭代闭环（改 → 检查 → 推 staging → CI → 下载产物 → 实机验证）、版本与发布规则、验证标准、已知环境坑
+- **[`AGENTS.md`](AGENTS.md)**：agent/协作者必须遵循的最简执行约束
+- **[`tools/`](tools/)**：可复现验证脚本——`quiz-test.js`（答题检索回归）、`syntax-test.js`（高级语法回归）、`attach-ctf-source.js`（CTF 知识库接入）
+- 当前工作目录：`C:\Users\Admin\Desktop\code\SerachDock`；推送通道：`staging`（CI 触发），`origin` 待主仓凭证恢复后补发
+
 ## 项目结构（核心）
 
 ```
