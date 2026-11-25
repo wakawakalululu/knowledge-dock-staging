@@ -6,8 +6,9 @@ mod search_tests {
     use crate::scope::ScopeConfig;
     use crate::engine::{load_stopwords, load_synonyms, Engine};
     use crate::indexer;
-    use std::fs;
+    use std::fs::{self, FileTimes, OpenOptions};
     use std::path::PathBuf;
+    use std::time::{Duration, UNIX_EPOCH};
 
     fn spec(dir: &std::path::Path, label: &str) -> crate::scope::RootSpec {
         crate::scope::RootSpec {
@@ -28,6 +29,17 @@ mod search_tests {
 
     fn write(path: &PathBuf, content: &str) {
         fs::write(path, content).unwrap();
+    }
+
+    fn write_with_mtime(path: &PathBuf, content: &str, mtime_ms: u64) {
+        write(path, content);
+        let modified = UNIX_EPOCH + Duration::from_millis(mtime_ms);
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(modified))
+            .unwrap();
     }
 
     const LAW: &str = "# 中华人民共和国劳动法（示例节选）\n\n## 第四章 工作时间和休息休假\n\n第三十六条 国家实行劳动者每日工作时间不超过八小时。\n\n第四十四条 用人单位应当支付高于正常工作时间工资的报酬，安排延长工作时间的支付加班费。\n\n## 第十二章 法律责任\n\n第九十条 违反本法规定延长劳动者工作时间的，责令改正并处罚款。\n";
@@ -119,6 +131,50 @@ mod search_tests {
         assert_eq!(stats.docs, 1);
         assert!(engine.search("公积金", 10, None, None).hits.is_empty(), "旧内容应被增量删除");
         assert!(!engine.search("年金", 10, None, None).hits.is_empty(), "新内容应被增量加入");
+    }
+
+    #[test]
+    fn mtime_range_filters_before_top_docs_without_losing_recent_low_rank_hit() {
+        let root = temp_dir("engine-mtime-recall");
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let old = now.saturating_sub(3 * 86_400_000);
+        for i in 0..120 {
+            write_with_mtime(
+                &root.join(format!("old-{i:03}.md")),
+                &format!("# 旧文档 {i}\n\nzqmtimeneedle zqmtimeneedle zqmtimeneedle zqmtimeneedle zqmtimeneedle\n"),
+                old,
+            );
+        }
+        write_with_mtime(
+            &root.join("recent.md"),
+            "# 近期文档\n\nzqmtimeneedle\n",
+            now,
+        );
+        let engine = Engine::open_or_create(&temp_dir("idx-mtime-recall"), load_synonyms(None), load_stopwords(None)).unwrap();
+        let stats = engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
+        assert_eq!(stats.docs, 121, "{stats:?}");
+
+        let unfiltered = engine.search("zqmtimeneedle", 10, None, None);
+        assert_eq!(unfiltered.hits.len(), 10);
+        assert!(
+            unfiltered.hits.iter().all(|h| h.path != "recent.md"),
+            "近期单次命中的文档必须位于普通 BM25 前 10 条之外，才能覆盖原缺陷"
+        );
+
+        let recent = engine.search("zqmtimeneedle mtime:>1d", 10, None, None);
+        assert!(
+            recent.hits.iter().any(|h| h.path == "recent.md"),
+            "时间窗必须先于 TopDocs 过滤，近期低排名文档不得丢失: {:?}",
+            recent.hits.iter().map(|h| &h.path).collect::<Vec<_>>()
+        );
+        assert!(recent.hits.iter().all(|h| h.mtime >= now.saturating_sub(86_400_000)));
+
+        let old_hits = engine.search("zqmtimeneedle mtime:<1d", 10, None, None);
+        assert_eq!(old_hits.hits.len(), 10);
+        assert!(old_hits.hits.iter().all(|h| h.path != "recent.md"));
     }
 
     #[test]

@@ -51,7 +51,7 @@ const get = async (q, limit = 10) => (await (await fetch(B + "?q=" + encodeURICo
   await run("mtime:>1d（最近修改）", async () => {
     const j = await get("注入 mtime:>1d");
     assert(j.ok, "ok=false");
-    assert(j.hits.length > 0, "最近 1 天应命中（库 3 小时前导入）");
+    assert(j.hits.length > 0, "最近 1 天应命中源文件 mtime 在一天内的近期文档");
   });
   await run("组合：\"模板注入\" root:des-ctf-knowledge type:manual -articles", async () => {
     const j = await get('"模板注入" root:des-ctf-knowledge type:manual -articles');

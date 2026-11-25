@@ -34,6 +34,24 @@ win_path() {
   fi
 }
 
+# Windows Node cannot reliably write to a WSL pipe (EISDIR). Capture through a
+# regular file, then let Bash read and forward the result.
+run_node() {
+  local output status contents
+  output="$(mktemp)"
+  if "$NODE_BIN" "$@" >"$output" 2>&1; then
+    status=0
+  else
+    status=$?
+  fi
+  IFS= read -r -d '' contents < "$output" || true
+  rm -f "$output"
+  if [[ -n "$contents" ]]; then
+    printf '%s\n' "$contents"
+  fi
+  return "$status"
+}
+
 require_tools() {
   [[ -x "$NODE_BIN" ]] || fail "Windows Node not found: $NODE_BIN"
   [[ -x "$GIT_BIN" ]] || fail "Windows Git not found: $GIT_BIN"
@@ -72,8 +90,8 @@ precheck() {
   [[ -f node_modules/@tauri-apps/cli/tauri.js ]] || fail "run npm ci before precheck"
   [[ -f src-tauri/icons/icon.ico ]] || fail "generate src-tauri/icons/icon.ico before precheck"
 
-  "$NODE_BIN" "$(win_path "$ROOT/tools/check-versions.js")"
-  "$NODE_BIN" --check "$(win_path "$ROOT/ui/app.js")"
+  run_node "$(win_path "$ROOT/tools/check-versions.js")"
+  run_node --check "$(win_path "$ROOT/ui/app.js")"
 
   if [[ -x "$MSYS_BASH" && "$ROOT" == /mnt/c/* ]]; then
     local msys_root="/c${ROOT#/mnt/c}"
@@ -112,7 +130,7 @@ watch() {
     fi
 
     local run_line=""
-    if run_line="$("$NODE_BIN" "$(win_path "$HELPER")" find-run "$(win_path "$runs_file")" "$sha")"; then
+    if run_line="$(run_node "$(win_path "$HELPER")" find-run "$(win_path "$runs_file")" "$sha")"; then
       local id status conclusion url head
       IFS=$'\t' read -r id status conclusion url head <<< "$run_line"
       echo "RUN id=$id status=$status conclusion=${conclusion:-pending} url=$url"
@@ -124,7 +142,7 @@ watch() {
 
         echo "CI_FAILED id=$id conclusion=$conclusion url=$url"
         api_get "$API/actions/runs/$id/jobs" "$TMP_DIR/jobs.json" || true
-        "$NODE_BIN" "$(win_path "$HELPER")" failed-jobs "$(win_path "$TMP_DIR/jobs.json")" || true
+        run_node "$(win_path "$HELPER")" failed-jobs "$(win_path "$TMP_DIR/jobs.json")" || true
 
         local logs_zip="$TMP_DIR/logs.zip"
         local logs_dir="$TMP_DIR/logs"
@@ -132,7 +150,7 @@ watch() {
         if api_get "$API/actions/runs/$id/logs" "$logs_zip"; then
           "$POWERSHELL_BIN" -NoProfile -Command \
             "Expand-Archive -LiteralPath '$(win_path "$logs_zip")' -DestinationPath '$(win_path "$logs_dir")' -Force" >/dev/null
-          "$NODE_BIN" "$(win_path "$HELPER")" filter-log "$(win_path "$logs_dir")" 120 || true
+          run_node "$(win_path "$HELPER")" filter-log "$(win_path "$logs_dir")" 120 || true
         else
           echo "LOG_FETCH_FAILED inspect $url in GitHub UI"
         fi
@@ -162,7 +180,7 @@ fetch_run() {
   api_get "$API/actions/workflows/$WORKFLOW/runs?branch=$BRANCH&per_page=30" "$runs_file"
 
   local run_line
-  run_line="$("$NODE_BIN" "$(win_path "$HELPER")" find-run "$(win_path "$runs_file")" "$sha" success)" \
+  run_line="$(run_node "$(win_path "$HELPER")" find-run "$(win_path "$runs_file")" "$sha" success)" \
     || fail "no successful run for sha=$sha"
   local run_id status conclusion url head
   IFS=$'\t' read -r run_id status conclusion url head <<< "$run_line"
@@ -170,7 +188,7 @@ fetch_run() {
   local artifacts_file="$TMP_DIR/artifacts.json"
   api_get "$API/actions/runs/$run_id/artifacts" "$artifacts_file"
   local artifact_line
-  artifact_line="$("$NODE_BIN" "$(win_path "$HELPER")" artifact "$(win_path "$artifacts_file")" "$artifact_name")" \
+  artifact_line="$(run_node "$(win_path "$HELPER")" artifact "$(win_path "$artifacts_file")" "$artifact_name")" \
     || fail "artifact $artifact_name not found in run $run_id"
   local artifact_id artifact_actual artifact_size
   IFS=$'\t' read -r artifact_id artifact_actual artifact_size <<< "$artifact_line"
@@ -200,9 +218,9 @@ fetch_run() {
 
   echo "RUN_RESULT exit_code=$code elapsed=${elapsed}s timeout=${timeout_seconds}s log=$(win_path "$log_file")"
   echo "RUN_ERROR_SUMMARY"
-  "$NODE_BIN" "$(win_path "$HELPER")" filter-file "$(win_path "$log_file")" 40 || true
+  run_node "$(win_path "$HELPER")" filter-file "$(win_path "$log_file")" 40 || true
   echo "RUN_LOG_TAIL"
-  "$NODE_BIN" "$(win_path "$HELPER")" tail-log "$(win_path "$log_file")" 40 || true
+  run_node "$(win_path "$HELPER")" tail-log "$(win_path "$log_file")" 40 || true
   return "$code"
 }
 

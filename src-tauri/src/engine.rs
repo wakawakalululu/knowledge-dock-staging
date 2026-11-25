@@ -9,10 +9,11 @@ use crate::indexer::{self, DocumentChunk, Stats};
 use jieba_rs::Jieba;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tantivy::collector::{Count, TopDocs};
-use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, Occur, PhraseQuery, QueryParser, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, Occur, PhraseQuery, QueryParser, RangeQuery, TermQuery};
 use tantivy::schema::{
     Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions, Value,
 };
@@ -20,7 +21,7 @@ use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
 /// 索引 schema 版本：字段/选项变更时递增（旧索引自动清空重建）
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = 6;
 
 /// 内嵌默认停用词（用户可通过配置目录 stopwords.json 覆盖扩展）
 const DEFAULT_STOPWORDS: &str = include_str!("../assets/stopwords.json");
@@ -202,6 +203,7 @@ struct Fields {
     doc_type: Field,
     root: Field,
     line: Field,
+    mtime: Field,
 }
 
 /// 缓存的查询解析器（schema/分词器固定，无需每次按键重建）
@@ -294,6 +296,11 @@ impl Engine {
                 ),
         );
         let line = schema_builder.add_u64_field("line", NumericOptions::default().set_stored());
+        // mtime 同时建立索引与 fast field：时间窗在 TopDocs 之前过滤，避免后过滤漏召回。
+        let mtime = schema_builder.add_u64_field(
+            "mtime",
+            NumericOptions::default().set_indexed().set_stored().set_fast(),
+        );
         let schema = schema_builder.build();
 
         // schema 版本化：版本不符/损坏 → 清空目录重建（manifest 一并清除触发全量同步）
@@ -347,7 +354,7 @@ impl Engine {
             writer: Mutex::new(writer),
             jieba,
             parsers,
-            fields: Fields { path, rel, title, content, breadcrumbs, doc_type, root, line },
+            fields: Fields { path, rel, title, content, breadcrumbs, doc_type, root, line, mtime },
             manifest: Mutex::new(manifest),
             synonyms: Mutex::new(synonyms),
             stopwords: Mutex::new(stopwords_set),
@@ -450,7 +457,7 @@ impl Engine {
                 let chunks = indexer::chunk_file(Path::new(&p.abs), &p.rel);
                 chunk_counts.insert(p.abs.clone(), chunks.len() as u64);
                 for c in &chunks {
-                    self.add_doc(&mut writer, c, label);
+                    self.add_doc(&mut writer, c, label, p.mtime);
                 }
             }
             writer.commit().map_err(|e| e.to_string())?;
@@ -497,7 +504,7 @@ impl Engine {
         *self.stopwords.lock().expect("sw lock") = sw;
     }
 
-    fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk, root_label: &str) {
+    fn add_doc(&self, writer: &mut IndexWriter, c: &DocumentChunk, root_label: &str, mtime: u64) {
         let f = &self.fields;
         let bc = c.breadcrumbs.join(" > ");
         writer
@@ -510,6 +517,7 @@ impl Engine {
                 f.doc_type => c.doc_type.as_str(),
                 f.root => root_label,
                 f.line => c.line as u64,
+                f.mtime => mtime,
             ))
             .ok();
     }
@@ -709,26 +717,39 @@ impl Engine {
                     Term::from_field_text(self.fields.title, tok), IndexRecordOption::Basic))));
             }
         }
+        // 时间窗直接进入索引查询：必须在 TopDocs 截断前过滤，不能靠事后放大召回量补偿。
+        if adv.mtime_after_days.is_some() || adv.mtime_before_days.is_some() {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let lower = adv.mtime_after_days.map(|d| {
+                Bound::Included(Term::from_field_u64(
+                    self.fields.mtime,
+                    now_ms.saturating_sub(d.saturating_mul(86_400_000)),
+                ))
+            }).unwrap_or(Bound::Unbounded);
+            let upper = adv.mtime_before_days.map(|d| {
+                Bound::Included(Term::from_field_u64(
+                    self.fields.mtime,
+                    now_ms.saturating_sub(d.saturating_mul(86_400_000)),
+                ))
+            }).unwrap_or(Bound::Unbounded);
+            clauses.push((Occur::Must, Box::new(RangeQuery::new(lower, upper))));
+        }
         if clauses.is_empty() {
             return SearchResponse { hits: Vec::new(), terms: effective, duration_ms: 0 };
         }
         let query = BooleanQuery::new(clauses);
 
-        // 5. 检索（path/mtime 后过滤时放大检索量补偿）
-        let need_post = !adv.path.is_empty() || adv.mtime_after_days.is_some() || adv.mtime_before_days.is_some();
+        // 5. 检索；仅 path 子串条件仍需后过滤并放大候选集。
+        let need_post = !adv.path.is_empty();
         let search_limit = if need_post { limit.saturating_mul(4).max(100) } else { limit };
         let searcher = self.reader.searcher();
         let top = match searcher.search(&query, &TopDocs::with_limit(search_limit)) {
             Ok(t) => t,
             Err(_) => return SearchResponse { hits: Vec::new(), terms: effective, duration_ms: 0 },
         };
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let after_cutoff = adv.mtime_after_days.map(|d| now_ms.saturating_sub(d * 86_400_000));
-        let before_cutoff = adv.mtime_before_days.map(|d| now_ms.saturating_sub(d * 86_400_000));
 
         let mut hits = Vec::new();
         for (score, addr) in top {
@@ -755,10 +776,11 @@ impl Engine {
             } else {
                 breadcrumbs.split(" > ").map(|s| s.to_string()).collect()
             };
-            let mtime = crate::indexer::mtime_ms(std::path::Path::new(&abs));
-            // path:/mtime: 后过滤
-            if let Some(f) = after_cutoff { if mtime < f { continue; } }
-            if let Some(f) = before_cutoff { if mtime > f { continue; } }
+            let mtime = d
+                .get_first(self.fields.mtime)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            // path 子串条件仍需后过滤；mtime 已在索引查询阶段过滤。
             if !adv.path.is_empty() {
                 let rel_l = rel.to_lowercase();
                 let abs_l = abs.to_lowercase();

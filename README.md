@@ -76,7 +76,7 @@ uTools 风格的本地知识库/应用/工具一体化检索悬浮窗：一条**
 | `path:片段` | `注入 path:techniques` | 路径包含过滤 |
 | `type:x` | `注入 type:manual` | 类型限定（manual/law/qa/note） |
 | `root:库名` | `模板注入 root:des-ctf-knowledge` | 库限定 |
-| `mtime:>Nd` / `mtime:<Nd` | `注入 mtime:>7d` | 最近/早于 N 天修改的文件 |
+| `mtime:>Nd` / `mtime:<Nd` | `注入 mtime:>7d` | 最近/早于 N 天修改的文件；时间窗在索引排名前过滤，不受 Top-N 截断影响 |
 
 可自由组合：`"模板注入" root:des-ctf-knowledge type:manual -articles`。HTTP 接口同样支持（`q=` 内含语法）。
 

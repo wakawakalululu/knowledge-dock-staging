@@ -28,14 +28,14 @@ switch (mode) {
     );
     if (!run) process.exit(2);
     console.log(
-      [run.id, run.status, run.conclusion || "", run.html_url, run.head_sha].join("\t"),
+      [run.id, run.status, run.conclusion || "-", run.html_url, run.head_sha].join("\t"),
     );
     break;
   }
 
   case "summary": {
     const run = readJson(args[0]);
-    console.log([run.status, run.conclusion || "", run.html_url, run.head_sha].join("\t"));
+    console.log([run.status, run.conclusion || "-", run.html_url, run.head_sha].join("\t"));
     break;
   }
 

@@ -3,7 +3,7 @@
 > 本文件是 knowledge-dock 的**权威工程基线**：开发环境、迭代闭环、发布规则、验证标准与已知环境坑。
 > 所有改动必须遵循；偏离需在此文件记录原因与例外。
 >
-> 最后更新：v0.8.40（仓库迁移至 `C:\Users\Admin\Desktop\code\SerachDock`）
+> 最后更新：v0.8.41（mtime 索引化与排名前时间窗过滤）
 
 ## 1. 仓库与发布通道
 
@@ -128,6 +128,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 - **拖拽区**：`data-tauri-drag-region` 只放在专用拖拽元素（`.s-icon`），不得放父容器
 - **HTTP handler 必须 catch_unwind**：单个 panic 只断连接，不得拖垮服务线程
 - **phrase 查询**：PhraseQuery 要求 >1 term，单词短语必须退化为 TermQuery
+- **可索引过滤条件**：`mtime` 等结构化条件必须在 `TopDocs` 截断前进入查询；不得只对前 N 条做后过滤并靠扩大 N 声称修复召回
 - **前端字符串**：HTML 属性内不得出现未转义引号（placeholder 事故）；含反引号/复杂串的文件操作用脚本文件
 
 ## 9. 已知环境坑（踩过即记，先查这里）
@@ -146,6 +147,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | 默认 GCM 弹窗中断自动化 | 交互式认证 | `GIT_TERMINAL_PROMPT=0` 仅用于诊断，不作为修复 |
 | 远程 shell 执行 `git` / `node` / `cargo` 提示 `command not found` | WSL PATH 未包含 Windows 工具目录 | 用绝对路径调用 `C:\Program Files\Git\cmd\git.exe`、`C:\Program Files\nodejs\node.exe` 与已安装 toolchain 的 `cargo.exe` |
 | Windows `git` / `node` 收到 `/mnt/c/...` 后找不到文件 | WSL 路径不会自动转换为 Windows 路径 | 参数统一经 `wslpath -w`；命令替换里的失败先赋值再使用，避免被外层 `echo` 掩盖 |
+| Windows Node 在 WSL 后台管道写 stdout 报 `EISDIR` | Windows 进程把 WSL 管道误判为目录 | Node 先重定向到普通临时文件，再由 Bash 读取转发；不要直接接入后台管道 |
 | MSYS2 `bash -lc` 丢失 WSL 传入的仓库路径变量 | Windows 登录 shell 未保留该环境变量 | 用 `printf %q` 编码 MSYS 路径后嵌入命令，不依赖跨进程自定义变量 |
 | WSL 直接启动 Windows `cargo` 时 `collect2: ld returned 53` | Windows 子进程 PATH 被缩成 `C:\Windows\System32`，找不到 MSYS2 `ld/as` | 通过 `C:\msys64\usr\bin\bash.exe -lc` 进入 MSYS2，加入 `/c/msys64/ucrt64/bin` 后再执行 `cargo check` |
 | 本地 `cargo check` 报 `src-tauri/icons/icon.ico` not found | 图标按约定不入库，CI 会动态生成 | 先 `npm ci`，再 `node scripts/gen-icon.mjs` 与 `node node_modules/@tauri-apps/cli/tauri.js icon scripts/app-icon.png -o src-tauri/icons` |
@@ -164,3 +166,4 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | 日期 | 版本 | 变更 |
 |---|---|---|
 | 2026-11-25 | v0.8.40 | 基线首次建立；仓库迁移至 `C:\Users\Admin\Desktop\code\SerachDock`；清理历史误提交空文件（`7d`/`Nd`）；本地构建缓存改 Z 盘 |
+| 2026-11-25 | v0.8.41 | mtime 写入 Tantivy 数值索引；时间窗在 TopDocs 前过滤；schema 升至 6 并自动重建旧索引 |
