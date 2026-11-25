@@ -37,9 +37,9 @@
 
 ### Iteration #3 - 2026-11-25T06:57:00Z
 
-- **Commit**: 待提交（v0.8.42 工作树，基线 `7551f15`）。
+- **Commit**: `9710558ba3214ff1dbf976b25c1a93159dec012d`（v0.8.42，基线 `7551f15`）。
 - **改动要点**: 接入可选划词自动搜索；UIA 只读优先、Ctrl+C 纯文本快照/恢复回退、字面量检索、不写历史、独立快捷键与失败回滚；成功/失败共用有序事件队列，失败也显窗提示；前端补 IME、chips 保留、竞态与启动监听回归；Windows 绑定统一为 0.62；驱动脚本兼容原生 Git Bash 与 WSL 路径。
-- **CI 状态**: 尚未开始；本轮尚未 commit/push。
+- **CI 状态**: [run 45619168747](https://github.com/wakawakalululu/knowledge-dock-staging/actions/runs/45619168747) `success`；产物 `knowledge-dock-windows-loop` 已下载并审计。
 - **本地门禁**: `loop_driver.sh precheck` 退出码 0，输出 `PRECHECK_OK 7551f15d28e6f0f6a0cbfdf41b4d1403e27b8d92`；六处版本一致、前端语法、`SELECTION_UI_OK`、`cargo check --locked` 均通过。`cargo check --tests --locked` 通过，仅保留两个存量 warning。
 - **配置诊断**: `import_diag` 成功解析旧配置与含划词字段的待导入配置，输出划词开关/快捷键/回退差异及 Ctrl+C 风险警告；未改写用户当前配置。
 - **UI 证据**: 本机 Chrome 无头 + Tauri mock 输出 `UI_SMOKE_OK 默认关闭/设置保存/字面量/不写历史/失败提示`；默认折叠截图 `.local-logs/ui-selection-default.png` 无额外覆盖层，通用设置截图 `.local-logs/ui-selection-settings.png` 已人工查看。
@@ -48,7 +48,7 @@
 
 ### Iteration #3 本地安全复核 - 2026-11-25T12:06:30Z
 
-- **Commit**: 待提交（工作树在基线 `7551f15` 之上）。
+- **Commit**: `9710558ba3214ff1dbf976b25c1a93159dec012d`（工作树在基线 `7551f15` 之上，已提交）。
 - **改动要点**: 剪贴板恢复改为清空前准备主副本与完整备份，并在首次重放失败时完整重试；快照与 Ctrl+C 结果均等待 `CloseClipboard` 后的稳定序列号，避免系统延迟提交格式造成旧序列号误判；连续触发合并为最新请求，结果带单调 `request_id`，窗口按显示器工作区约束完整显示。人工复核另修正序列号持续变化时的等待节流，以及 2000 字符边界可能留下的尾随空格。
 - **本地门禁**: 删除临时探针源文件后，`loop_driver.sh precheck` 退出码 0（6 处版本、三种前端回归、`cargo check --locked`）；`cargo check --tests --locked` 通过，仅有两个存量 warning。
 - **实机安全证据**: 临时 Rust 探针实际执行并通过归一化/2000 字符/UTF-16/格式白名单/恢复告警断言；当前 `selection.rs` 的真实快照恢复路径通过，原始纯文本逐字恢复；自定义格式、图片、文件、富文本均在 Ctrl+C 注入前拒绝且原内容保留，测试 finally 恢复原始剪贴板。
@@ -56,3 +56,17 @@
 - **实机缺口**: 当前工具桌面下原生 `EDIT` 即使获得前台/焦点，`EM_GETSEL` 仍为 `0,0`，UIA 提供方不暴露 TextPattern，真实键盘与直接 `EM_SETSEL` 均未形成选区；真实 Notepad 复测同样为 `NOTEPAD_SELECTION 0,0`、焦点匹配但 UIA 类型为 `Pane` 且无 TextPattern。因此 UIA 正向读取与 Ctrl+C 正向复制链路仍未验证通过，不能计为成功。
 - **单测状态**: 测试目标仅完成编译；测试 exe 启动错误 `0xc0000139` 未重新证明解决，未报告 `cargo test` 全套通过。
 - **下一步行动**: 完成独立代码审查后提交，仅推 staging；推送仍须以最新工作树 precheck 退出码 0 为前提。
+
+### Iteration #3 最终实机审计 - 2026-11-25T14:54:00Z
+
+- **审计提交**: `9710558ba3214ff1dbf976b25c1a93159dec012d`（v0.8.42）。
+- **CI 状态**: [run 45619168747](https://github.com/wakawakalululu/knowledge-dock-staging/actions/runs/45619168747) `completed/success`；artifact `knowledge-dock-windows-loop` 已下载。
+- **产物证据**: ZIP 19,085,366 字节，SHA-256 `3f6c0ebf89ddbe39633ffc7594cb2a6a5a6dd20b30ec9f20276d1bddb18ccb11`；portable 21,699,584 字节，SHA-256 `12bafb482d5f0107a8b3169fdde3540ebe01667f849326a74e5a17ae10ee5f5a`；NSIS 10,539,411 字节，SHA-256 `faa2cf629af0e55fb8425426ae9d5af877f74d5f4eeab4ac10c93076e78cf252`；两个 exe 的 File/Product Version 均为 0.8.42。
+- **可复现实机结果**: portable 启动日志显示同步完成 `docs=1124 blocks=83513`；真实 HTTP API 答题回归 9/9、高级语法回归 10/10。默认配置直接读取为 `selection_search_enabled=false`、`selection_shortcut=Alt+Shift+Space`、`selection_clipboard_fallback=false`。
+- **配置落盘**: 通过真实设置 UI 启用划词后直接读取 `config.json`，开关为 true、快捷键为 `Alt+Shift+Space`、回退为 false；回退复测前按仓库规范先执行 `cargo run --bin import_diag`，确认仅回退开关变化及风险警告后再注入；测试结束后再次诊断并恢复为开关/回退均 false，直接读盘断言通过。
+- **UIA 正向链路**: 本机 Chrome 真实 textarea 选区经临时探针验证 `method=uia` 且文本逐字一致；v0.8.42 portable 的真实 `Alt+Shift+Space` 链路将完整字面量（含 `+must -exclude title: root:` 与中文库名）写入搜索框并渲染结果，搜索历史 6→6；截图 `.local-logs/ui-selection-production-shortcut.png` 已人工查看。
+- **Ctrl+C 正向链路**: 标准 WinForms TextBox 临时探针通过真实 Ctrl+C，捕获完整字面量并逐字恢复原剪贴板；最终 portable 在无 TextPattern、复制时由原前台子窗口合法持有剪贴板的测试控件上完成完整回退，`FocusId=q`、查询逐字一致、`ClipboardRestored=true`、历史 6→6；截图 `.local-logs/ui-selection-production-fallback.png` 已人工查看。
+- **安全拒绝链路**: 自定义格式、图片、文件、富文本均在 Ctrl+C 注入前拒绝且原内容保留；Chrome 并发剪贴板更新触发“检测到剪贴板被其他程序更新，已停止划词搜索并保留最新内容”，证明安全门不会覆盖新内容，测试 finally 恢复了原始剪贴板。
+- **单测状态**: 补齐 MSYS2/Rust GNU 工具路径后，定向 `cargo test --locked --lib selection::tests -- --nocapture` 完成编译，但测试 exe 仍在启动阶段退出 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未进入断言，因此不计为单测通过。
+- **清理**: 最终 portable 进程数 0，18230 LISTEN 数 0；用户配置保持划词与回退默认关闭，搜索历史保持 6 条。
+- **下一步行动**: 产品层收官完成；无未解决的产品缺陷。Rust 单测启动环境问题仍作为已知阻塞保留，不计入本次成功项。

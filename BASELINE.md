@@ -158,7 +158,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | MSYS2 `bash -lc` 丢失 WSL 传入的仓库路径变量 | Windows 登录 shell 未保留该环境变量 | 用 `printf %q` 编码 MSYS 路径后嵌入命令，不依赖跨进程自定义变量 |
 | WSL 直接启动 Windows `cargo` 时 `collect2: ld returned 53` | Windows 子进程 PATH 被缩成 `C:\Windows\System32`，找不到 MSYS2 `ld/as` | 通过 `C:\msys64\usr\bin\bash.exe -lc` 进入 MSYS2，加入 `/c/msys64/ucrt64/bin` 后再执行 `cargo check` |
 | 本地 `cargo check` 报 `src-tauri/icons/icon.ico` not found | 图标按约定不入库，CI 会动态生成 | 先 `npm ci`，再 `node scripts/gen-icon.mjs` 与 `node node_modules/@tauri-apps/cli/tauri.js icon scripts/app-icon.png -o src-tauri/icons` |
-| 本地 `cargo test` 报 `dlltool.exe`/`windres` not found | Git Bash 登录环境未包含 MSYS2 ucrt64 工具链 | 执行 `PATH="/c/msys64/ucrt64/bin:$HOME/.cargo/bin:$PATH" cargo ...`；`precheck` 在 Windows 分支也要显式设置该 PATH |
+| 本地 `cargo check` / `cargo test` 报 `dlltool.exe`、`gcc.exe` 或 `windres` not found | Git Bash 登录环境未包含 MSYS2 ucrt64 与 Rust GNU 自包含链接工具 | 执行 `PATH="/c/msys64/ucrt64/bin:/c/Users/Admin/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained:$HOME/.cargo/bin:$PATH" cargo ...`；`precheck` 在 Windows 分支也要显式设置该 PATH |
 | `loop_driver.sh` 在原生 Git Bash 找不到 `/mnt/c/.../node.exe` | 驱动脚本原先只按 WSL 路径探测 Windows 工具 | 同时探测 `/mnt/c` 与 `/c`，`win_path` 优先 `wslpath`、其次 `cygpath`；MSYS2  manifest 路径按实际根路径归一化 |
 | `cargo test` 编译成功后测试 exe 报 `STATUS_ENTRYPOINT_NOT_FOUND` | 测试可执行文件在主机运行时启动失败，尚未进入断言 | 用 `ldd` / `objdump` 排查 MSYS2 DLL；未解决前不得宣称单测通过，以 CI 构建结果作为独立验证 |
 | `OpenClipboard(NULL)` 恢复文本时 `SetClipboardData` 失败 | `EmptyClipboard` 会把剪贴板 owner 置空 | 划词回退必须用本次采集期间存在的合法隐藏消息窗口打开/恢复剪贴板；复制后还需复核 owner 归属与全部格式，不能仅凭序列号变化 |
