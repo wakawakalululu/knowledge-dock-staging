@@ -153,7 +153,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | 本地 `cargo check` 报 `src-tauri/icons/icon.ico` not found | 图标按约定不入库，CI 会动态生成 | 先 `npm ci`，再 `node scripts/gen-icon.mjs` 与 `node node_modules/@tauri-apps/cli/tauri.js icon scripts/app-icon.png -o src-tauri/icons` |
 | `cargo test` 编译成功后测试 exe 报 `STATUS_ENTRYPOINT_NOT_FOUND` | 测试可执行文件在主机运行时启动失败，尚未进入断言 | 用 `ldd` / `objdump` 排查 MSYS2 DLL；未解决前不得宣称单测通过，以 CI 构建结果作为独立验证 |
 | `/api/health` 已通但 schema 重建期间查询全为 0 | 健康探针只证明 HTTP 就绪，不证明首个索引 commit 已可见 | 重建场景先轮询 `/api/stats` 的 `stats.total_docs > 0` 再跑回归；截图前用第二次实例触发单实例 `reveal` |
-| 旧基线中的 Z 盘不存在、F 盘不可靠 | 当前远程主机只自动挂载 C 盘，`F:` 无对应 `Get-Volume` 卷 | 不沿用旧机路径；先用 `df` / `Get-PSDrive` 确认可写位置和剩余空间 |
+| `df` 显示 F 盘有空间，但 `mkdir` / Cargo 写 `F:/cargo-target` 报 `os error 2` | 当前 F 盘是 `scdfs` 只读挂载，不是可写构建盘 | 先用实际建目录验证可写性；不可写时复用现有 C 盘 target 做增量 `precheck`，需要重链接单测时先清理 C 盘空间 |
 
 ## 10. 提交与文档规范
 

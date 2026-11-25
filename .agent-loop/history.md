@@ -24,3 +24,13 @@
 - **实机结果**: 索引重建完成（1,124 个源文件 / 83,513 个块）后，答题回归 9/9、语法回归 10/10；全局 `注入 mtime:>1d` 召回 2 条 `biglib/overview.md`，所有返回 mtime 均在时间窗内；单实例唤回后搜索框可见，截图已人工查看；验证结束进程数为 0。
 - **根因诊断**: 首次实机回归在 schema 6 全量重建完成前运行，`/api/health` 已通但索引尚不可见，产生无效零结果；验证器改为等待 `/api/stats.stats.total_docs > 0` 后重跑，全部通过。
 - **下一步行动**: 记录收官证据并完成最终审计；无未解决的产品缺陷。
+
+### Iteration #2 最终审计 - 2026-11-25T01:36:49Z
+
+- **审计提交**: `3ac5fe90ad44e7f22bd3572bd23658c1924da0e1`（仅文档补充，代码与 `13b71a9` 相同）。
+- **CI 状态**: [run 45518007621](https://github.com/wakawakalululu/knowledge-dock-staging/actions/runs/45518007621) `completed/success`；artifact `knowledge-dock-windows-loop` ZIP SHA-256 `fc1ce4e8a7faad2a515604defddd32e13c01e1a9f2ae40d8fe98b23fdf6a74c7`，与本地文件一致。
+- **本地门禁**: `loop_driver.sh precheck` 退出码 0，输出 `PRECHECK_OK 3ac5fe90ad44e7f22bd3572bd23658c1924da0e1`。
+- **可复现实机结果**: 本次 portable 日志 `.local-logs/audit_20261125T092144Z.stderr.log` 记录同步完成 `docs=1124 blocks=83513`；`.local-logs/audit_20261125T092144Z.syntax.log` 为 `10/10 通过`，`.local-logs/audit_20261125T092144Z.quiz.log` 为 `9/9 通过`；`.local-logs/audit_20261125T092144Z.mtime.json` 显示全局时间窗命中 2 条、越界 0 条。
+- **UI 与清理**: 单实例唤回后窗口句柄非零，600×76 搜索框截图 `.local-logs/audit_20261125T092144Z.ui.png` 已人工查看；PID 75528 已停止，18230 无 LISTEN，无残留 portable 进程。
+- **单测阻塞**: 现有测试 exe 包含目标用例，但 Windows 退出码 `-1073741511 (0xC0000139)`；补充 DLL 搜索路径与同目录 `WebView2Loader.dll` 均未修复。`cargo test` 重建进一步被 C 盘 `os error 112` 阻塞；F 盘虽显示 20GB 空闲，但当前 `scdfs` 挂载不可写。单测未通过，不计为验证成功。
+- **下一步行动**: 产品层收官完成；单测环境需在获得可写构建盘或清理 C 盘后继续排查，本轮不再推送第 4 次构建。
