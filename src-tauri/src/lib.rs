@@ -14,6 +14,7 @@ pub mod scope;
 pub mod engine;
 pub mod gitsync;
 pub mod indexer;
+pub mod selection;
 pub mod webdav;
 
 #[cfg(test)]
@@ -24,7 +25,7 @@ use engine::{Engine, SearchResponse, StatsDetail};
 use indexer::Stats;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -50,6 +51,23 @@ struct AppState {
     webdav_lock: Mutex<()>,
     /// 开始菜单应用列表缓存（首次搜索时惰性构建）
     apps_cache: Mutex<Option<Vec<apps::AppHit>>>,
+    /// 划词采集互斥：慢速 COM/剪贴板操作不阻塞快捷键线程；忙碌期间记录最新重试请求
+    selection_control: Mutex<SelectionControl>,
+    /// WebView 监听器就绪前到达的划词结果或失败提示（按到达顺序派发）
+    pending_selection: Mutex<VecDeque<SelectionOutcome>>,
+    /// 注册失败等启动警告，待前端就绪后展示
+    startup_warning: Mutex<Option<String>>,
+}
+
+enum SelectionOutcome {
+    Captured(selection::CaptureResult),
+    Failed(String),
+}
+
+#[derive(Default)]
+struct SelectionControl {
+    busy: bool,
+    latest_id: u64,
 }
 
 /// 拖动节流：窗口移动事件的保存间隔
@@ -60,6 +78,10 @@ static LAST_Y: AtomicI64 = AtomicI64::new(i64::MIN);
 /// 前端就绪信号：窗口默认隐藏，前端加载完成后调用 frontend_ready 再显示；
 /// 防止 webview 未渲染完成的黑屏/空窗闪烁
 static FRONTEND_SHOWN: AtomicBool = AtomicBool::new(false);
+/// 仅前端监听器注册完成后为 true；3 秒兜底显窗不得提前放行划词事件。
+static FRONTEND_READY: AtomicBool = AtomicBool::new(false);
+/// 划词事件单调递增请求号；忙碌期间的新触发会要求丢弃旧结果并重采集。
+static NEXT_SELECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Serialize)]
 struct PickResult {
@@ -174,17 +196,22 @@ fn start_watchers(app: &AppHandle) {
     *state.watcher.lock().expect("watcher lock") = Some(watcher);
 }
 
-/// 以折叠形态显示并聚焦（打开即一条搜索框，uTools 式）
-fn reveal(app: &AppHandle) {
-    let state: State<AppState> = app.state();
-    let width = state.cfg.lock().expect("cfg lock").width;
+/// 显示窗口当前的前端形态并聚焦；窗口高度统一由前端 `update_view()` 驱动。
+fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.set_size(tauri::LogicalSize::new(width, COLLAPSED_H));
         let _ = win.show();
         let _ = win.set_focus();
-        // 通知前端复位：清空输入、收起面板
-        let _ = app.emit("ui-reset", ());
     }
+}
+
+fn reveal(app: &AppHandle) {
+    show_main_window(app);
+    // 普通显隐才复位；划词事件必须先于任何 ui-reset 到达。
+    let _ = app.emit("ui-reset", ());
+}
+
+fn reveal_selection(app: &AppHandle) {
+    show_main_window(app);
 }
 
 fn toggle_visible(app: &AppHandle) {
@@ -200,44 +227,226 @@ fn toggle_visible(app: &AppHandle) {
     }
 }
 
-/// 注册（或换绑）全局快捷键；失败返回错误由调用方回退默认值
-fn apply_shortcut(app: &AppHandle, accel: &str) -> Result<(), String> {
-    let accel = accel.trim();
-    let accel = if accel.is_empty() { config::DEFAULT_SHORTCUT } else { accel };
+fn shortcut_or_default(value: &str, default: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() { default.to_string() } else { value.to_string() }
+}
+
+fn normalize_shortcut_config(cfg: &mut Config) {
+    cfg.shortcut = shortcut_or_default(&cfg.shortcut, config::DEFAULT_SHORTCUT);
+    cfg.selection_shortcut = shortcut_or_default(
+        &cfg.selection_shortcut,
+        config::DEFAULT_SELECTION_SHORTCUT,
+    );
+}
+
+fn shortcuts_conflict(cfg: &Config) -> bool {
+    let main = shortcut_or_default(&cfg.shortcut, config::DEFAULT_SHORTCUT);
+    let selection = shortcut_or_default(
+        &cfg.selection_shortcut,
+        config::DEFAULT_SELECTION_SHORTCUT,
+    );
+    cfg.selection_search_enabled && main.eq_ignore_ascii_case(&selection)
+}
+
+/// 注册完整快捷键集合；任一步失败都不保留半套绑定。
+fn register_shortcuts(app: &AppHandle, cfg: &Config) -> Result<(), String> {
+    if shortcuts_conflict(cfg) {
+        return Err("划词搜索快捷键不能与窗口显隐快捷键相同".into());
+    }
+    let main = shortcut_or_default(&cfg.shortcut, config::DEFAULT_SHORTCUT);
+    let selection = shortcut_or_default(
+        &cfg.selection_shortcut,
+        config::DEFAULT_SELECTION_SHORTCUT,
+    );
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
-    gs.on_shortcut(accel.to_lowercase().as_str(), |app, _sc, event| {
+    gs.on_shortcut(main.to_lowercase().as_str(), |app, _sc, event| {
         if event.state == ShortcutState::Pressed {
             toggle_visible(app);
         }
     })
-    .map_err(|e| e.to_string())
+    .map_err(|e| format!("窗口快捷键「{main}」注册失败: {e}"))?;
+    if cfg.selection_search_enabled {
+        gs.on_shortcut(selection.to_lowercase().as_str(), |app, _sc, event| {
+            if event.state == ShortcutState::Pressed {
+                begin_selection_capture(app);
+            }
+        })
+        .map_err(|e| format!("划词快捷键「{selection}」注册失败: {e}"))?;
+    }
+    Ok(())
 }
 
-/// 展开后若超出屏幕底部则上移，保证面板完整可见
+/// 换绑失败时恢复旧配置，避免设置保存失败却丢掉原有快捷键。
+fn apply_shortcuts(app: &AppHandle, cfg: &Config) -> Result<(), String> {
+    let previous = {
+        let state: State<AppState> = app.state();
+        let cfg = state.cfg.lock().expect("cfg lock");
+        cfg.clone()
+    };
+    if let Err(e) = register_shortcuts(app, cfg) {
+        let rollback = register_shortcuts(app, &previous).or_else(|_| {
+            // 旧配置本身损坏时也至少恢复默认显隐键，不留下半套绑定。
+            let mut fallback = previous;
+            fallback.selection_search_enabled = false;
+            fallback.shortcut = config::DEFAULT_SHORTCUT.to_string();
+            register_shortcuts(app, &fallback)
+        });
+        kdlog!(warn, "shortcut", "快捷键换绑失败: {e}; 回滚={rollback:?}");
+        return Err(e);
+    }
+    Ok(())
+}
+
+fn emit_selection_outcome(app: &AppHandle, outcome: SelectionOutcome) {
+    match outcome {
+        SelectionOutcome::Captured(result) => {
+            let _ = app.emit("selection-search", &result);
+        }
+        SelectionOutcome::Failed(message) => {
+            let _ = app.emit("selection-search-error", &message);
+        }
+    }
+}
+
+fn dispatch_selection(app: &AppHandle, outcome: SelectionOutcome) {
+    let state: State<AppState> = app.state();
+    // 从 ready 判定到 emit 全程持锁，避免 frontend_ready 与迟到的旧选区交错。
+    let mut pending = state.pending_selection.lock().expect("pending selection lock");
+    if !FRONTEND_READY.load(Ordering::SeqCst) {
+        pending.push_back(outcome);
+        return;
+    }
+    // 失败也必须显窗，否则隐藏状态下的提示会无人看见。
+    reveal_selection(app);
+    emit_selection_outcome(app, outcome);
+}
+
+fn latest_selection_retry(control: &mut SelectionControl, current_id: u64) -> Option<u64> {
+    (control.latest_id != current_id).then_some(control.latest_id)
+}
+
+fn begin_selection_capture(app: &AppHandle) {
+    let (enabled, fallback) = {
+        let state: State<AppState> = app.state();
+        let cfg = state.cfg.lock().expect("cfg lock");
+        (cfg.selection_search_enabled, cfg.selection_clipboard_fallback)
+    };
+    if !enabled {
+        return;
+    }
+    let request_id = NEXT_SELECTION_ID.fetch_add(1, Ordering::SeqCst).max(1);
+    {
+        let state: State<AppState> = app.state();
+        let mut control = state.selection_control.lock().expect("selection control lock");
+        control.latest_id = request_id;
+        if control.busy {
+            // 不阻塞快捷键线程；当前采集完成后只重读最新选区，旧结果直接丢弃。
+            return;
+        }
+        control.busy = true;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut current_id = request_id;
+        loop {
+            let result = selection::capture(fallback);
+            let state: State<AppState> = app.state();
+            let mut control = state.selection_control.lock().expect("selection control lock");
+            if let Some(latest_id) = latest_selection_retry(&mut control, current_id) {
+                current_id = latest_id;
+                drop(control);
+                continue;
+            }
+            let outcome = match result {
+                Ok(mut result) => {
+                    result.request_id = current_id;
+                    SelectionOutcome::Captured(result)
+                }
+                Err(e) => SelectionOutcome::Failed(e),
+            };
+            // 持锁派发，确保后续触发不会在旧结果 emit 之前启动新采集。
+            dispatch_selection(&app, outcome);
+            control.busy = false;
+            return;
+        }
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScreenArea {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+/// 选择与窗口重叠最多的工作区，同时限制宽高并把完整窗口移入该工作区。
+fn fit_window_to_area(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    areas: &[ScreenArea],
+) -> Option<(i32, i32, u32, u32)> {
+    if areas.is_empty() || width == 0 || height == 0 {
+        return None;
+    }
+    let mut best = 0usize;
+    let mut best_overlap = -1i64;
+    for (index, area) in areas.iter().enumerate() {
+        let left = (x as i64).max(area.x as i64);
+        let top = (y as i64).max(area.y as i64);
+        let right = (x as i64 + width as i64).min(area.x as i64 + area.width as i64);
+        let bottom = (y as i64 + height as i64).min(area.y as i64 + area.height as i64);
+        let overlap = (right - left).max(0) * (bottom - top).max(0);
+        if overlap > best_overlap {
+            best = index;
+            best_overlap = overlap;
+        }
+    }
+    let area = areas[best];
+    if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let fitted_width = width.min(area.width).max(1);
+    let fitted_height = height.min(area.height).max(1);
+    let max_x = area.x as i64 + area.width as i64 - fitted_width as i64;
+    let max_y = area.y as i64 + area.height as i64 - fitted_height as i64;
+    let fitted_x = (x as i64).clamp(area.x as i64, max_x) as i32;
+    let fitted_y = (y as i64).clamp(area.y as i64, max_y) as i32;
+    Some((fitted_x, fitted_y, fitted_width, fitted_height))
+}
+
+/// 展开后按当前显示器工作区约束宽高与位置，避免底部或跨屏裁切。
 fn clamp_into_monitor(app: &AppHandle) {
     let (Some(win), Ok(monitors)) = (
         app.get_webview_window("main"),
         app.available_monitors(),
     ) else { return };
     let (Ok(pos), Ok(size)) = (win.outer_position(), win.outer_size()) else { return };
-    let h = size.height as i32;
-    for m in monitors {
-        let (mx, my) = (m.position().x, m.position().y);
-        let (mw, mh) = (m.size().width as i32, m.size().height as i32);
-        if pos.x >= mx && pos.x < mx + mw && pos.y >= my && pos.y < my + mh {
-            let mut ny = pos.y;
-            if pos.y + h > my + mh {
-                ny = my + mh - h;
+    let areas: Vec<ScreenArea> = monitors
+        .iter()
+        .map(|monitor| {
+            let position = monitor.work_area().position;
+            let work_size = monitor.work_area().size;
+            ScreenArea {
+                x: position.x,
+                y: position.y,
+                width: work_size.width,
+                height: work_size.height,
             }
-            if ny < my {
-                ny = my;
-            }
-            if ny != pos.y {
-                let _ = win.set_position(tauri::PhysicalPosition::new(pos.x, ny));
-            }
-            break;
-        }
+        })
+        .collect();
+    let Some((x, y, width, height)) =
+        fit_window_to_area(pos.x, pos.y, size.width, size.height, &areas)
+    else { return };
+    if width != size.width || height != size.height {
+        let _ = win.set_size(tauri::PhysicalSize::new(width, height));
+    }
+    if x != pos.x || y != pos.y {
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
 }
 
@@ -254,14 +463,9 @@ fn save_config(app: AppHandle, cfg: Config, state: State<'_, AppState>) -> Resul
     if !(320.0..=1600.0).contains(&cfg.width) {
         cfg.width = config::DEFAULT_WIDTH;
     }
-    let accel = cfg.shortcut.trim().to_string();
-    cfg.shortcut = if accel.is_empty() {
-        config::DEFAULT_SHORTCUT.to_string()
-    } else {
-        accel
-    };
-    // 换绑快捷键；失败则保持旧键并报错
-    apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
+    normalize_shortcut_config(&mut cfg);
+    // 换绑快捷键；失败则保持旧配置与旧键并报错
+    apply_shortcuts(&app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
     // 自动备份轮换
@@ -296,15 +500,26 @@ fn search(
     type_filter: Option<String>,
     root_filter: Option<String>,
     limit: Option<usize>,
+    literal: Option<bool>,
     state: State<'_, AppState>,
 ) -> SearchResponse {
     let start = std::time::Instant::now();
-    let mut resp = state.engine.search(
-        &q,
-        limit.unwrap_or_else(searchLimit),
-        type_filter.as_deref(),
-        root_filter.as_deref(),
-    );
+    let limit = limit.unwrap_or_else(searchLimit);
+    let mut resp = if literal.unwrap_or(false) {
+        state.engine.search_literal(
+            &q,
+            limit,
+            type_filter.as_deref(),
+            root_filter.as_deref(),
+        )
+    } else {
+        state.engine.search(
+            &q,
+            limit,
+            type_filter.as_deref(),
+            root_filter.as_deref(),
+        )
+    };
     resp.duration_ms = start.elapsed().as_millis() as u64;
     resp
 }
@@ -384,8 +599,9 @@ fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>)
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let path = dir.join("profiles").join(format!("{name}.json"));
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let cfg: Config = serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))?;
-    apply_shortcut(&app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
+    let mut cfg: Config = serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))?;
+    normalize_shortcut_config(&mut cfg);
+    apply_shortcuts(&app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
     let roots = cfg.root_specs();
@@ -624,7 +840,7 @@ fn scope_check(path: String, state: State<'_, AppState>) -> ScopeCheckResult {
 /// 健康问题条目
 #[derive(Serialize)]
 struct HealthIssue {
-    /// duplicate_root | missing_path | bad_glob | git_source_broken | git_root_missing | bad_value | git_sync_failed | webdav_sync_failed
+    /// duplicate_root | missing_path | bad_glob | git_source_broken | git_root_missing | bad_value | git_sync_failed | webdav_sync_failed | shortcut_conflict | clipboard_fallback_risk
     kind: String,
     /// error | warn
     severity: String,
@@ -645,6 +861,25 @@ fn normalize_rule(r: &str) -> String {
 /// 收集当前配置的健康问题（与 fix_all 的修复逻辑一一对应）
 fn collect_health_issues(cfg: &Config) -> Vec<HealthIssue> {
     let mut issues: Vec<HealthIssue> = Vec::new();
+
+    let mut shortcut_cfg = cfg.clone();
+    normalize_shortcut_config(&mut shortcut_cfg);
+    if shortcuts_conflict(&shortcut_cfg) {
+        issues.push(HealthIssue {
+            kind: "shortcut_conflict".into(),
+            severity: "error".into(),
+            message: "划词搜索快捷键与窗口显隐快捷键相同，请修改其一".into(),
+            fixable: false,
+        });
+    }
+    if cfg.selection_search_enabled && cfg.selection_clipboard_fallback {
+        issues.push(HealthIssue {
+            kind: "clipboard_fallback_risk".into(),
+            severity: "warn".into(),
+            message: "划词搜索已启用 Ctrl+C 回退：仅操作纯文本剪贴板，遇到图片/文件/富文本会拒绝回退".into(),
+            fixable: false,
+        });
+    }
 
     // 1. 重复知识库根（归一化后 path 相同）
     let mut seen: HashMap<String, usize> = HashMap::new();
@@ -1308,8 +1543,9 @@ fn read_config_file(path: &str) -> Result<Config, String> {
 
 /// 应用导入：解析 → 快捷键换绑 → 落盘 → 同步索引/监听 → WebDAV 重建镜像
 fn apply_import_path(app: &AppHandle, state: &State<'_, AppState>, path: &str) -> Result<Config, String> {
-    let cfg = read_config_file(path)?;
-    apply_shortcut(app, &cfg.shortcut).map_err(|e| format!("快捷键注册失败: {e}"))?;
+    let mut cfg = read_config_file(path)?;
+    normalize_shortcut_config(&mut cfg);
+    apply_shortcuts(app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(app, &cfg);
     let roots = cfg.root_specs();
@@ -1442,6 +1678,23 @@ pub fn diff_configs(cur: &Config, next: &Config) -> (Vec<String>, Vec<String>) {
     if cur.shortcut != next.shortcut {
         summary.push(format!("快捷键：{} → {}", cur.shortcut, next.shortcut));
     }
+    if cur.selection_search_enabled != next.selection_search_enabled {
+        summary.push(format!(
+            "划词搜索：{} → {}",
+            if cur.selection_search_enabled { "开" } else { "关" },
+            if next.selection_search_enabled { "开" } else { "关" }
+        ));
+    }
+    if cur.selection_shortcut != next.selection_shortcut {
+        summary.push(format!("划词快捷键：{} → {}", cur.selection_shortcut, next.selection_shortcut));
+    }
+    if cur.selection_clipboard_fallback != next.selection_clipboard_fallback {
+        summary.push(format!(
+            "划词 Ctrl+C 回退：{} → {}",
+            if cur.selection_clipboard_fallback { "开" } else { "关" },
+            if next.selection_clipboard_fallback { "开" } else { "关" }
+        ));
+    }
     if (cur.width - next.width).abs() > 0.5 {
         summary.push(format!("窗口宽度：{} → {} px", cur.width, next.width));
     }
@@ -1454,6 +1707,9 @@ pub fn diff_configs(cur: &Config, next: &Config) -> (Vec<String>, Vec<String>) {
     }
 
     // 警告
+    if next.selection_search_enabled && next.selection_clipboard_fallback {
+        warnings.push("划词搜索将使用 Ctrl+C 回退；图片/文件/富文本/自定义剪贴板格式会阻止回退".into());
+    }
     let dav_encrypted = next
         .webdav_sources
         .iter()
@@ -1649,8 +1905,25 @@ fn quit_app(app: AppHandle) {
 /// 前端初始化完成信号：此时 webview 已渲染，显示窗口（消除启动黑屏）
 #[tauri::command]
 fn frontend_ready(app: AppHandle) {
-    if !FRONTEND_SHOWN.swap(true, Ordering::SeqCst) {
+    let state: State<AppState> = app.state();
+    let mut pending = state.pending_selection.lock().expect("pending selection lock");
+    // 重复 ready 不得再次 ui-reset 清掉刚放行的划词结果。
+    if FRONTEND_READY.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    FRONTEND_SHOWN.store(true, Ordering::SeqCst);
+    if pending.is_empty() {
         reveal(&app);
+    }
+    for outcome in pending.drain(..) {
+        // 每个结果（包括失败）都先显窗；排队事件保持原始顺序且不发送 ui-reset。
+        reveal_selection(&app);
+        emit_selection_outcome(&app, outcome);
+    }
+    drop(pending);
+    let warning = state.startup_warning.lock().expect("startup warning lock").take();
+    if let Some(warning) = warning {
+        let _ = app.emit("app-warning", &warning);
     }
 }
 
@@ -2320,6 +2593,9 @@ pub fn run() {
                 git_lock: Mutex::new(()),
                 webdav_lock: Mutex::new(()),
                 apps_cache: Mutex::new(None),
+                selection_control: Mutex::new(SelectionControl::default()),
+                pending_selection: Mutex::new(VecDeque::new()),
+                startup_warning: Mutex::new(None),
             });
 
             // 本地 HTTP 检索接口（供其它程序调用；端口/token 在 config.api，改动需重启）
@@ -2397,9 +2673,26 @@ pub fn run() {
                 })
                 .build(&handle)?;
 
-            // 全局快捷键（注册失败则回退默认键）
-            if apply_shortcut(&handle, &cfg.shortcut).is_err() {
-                let _ = apply_shortcut(&handle, config::DEFAULT_SHORTCUT);
+            // 全局快捷键：划词注册失败时禁用该功能并保留可用显隐键，不保留半套绑定。
+            let mut runtime_cfg = cfg.clone();
+            if let Err(e) = apply_shortcuts(&handle, &runtime_cfg) {
+                runtime_cfg.selection_search_enabled = false;
+                if apply_shortcuts(&handle, &runtime_cfg).is_err() {
+                    runtime_cfg.shortcut = config::DEFAULT_SHORTCUT.to_string();
+                    runtime_cfg.selection_shortcut = config::DEFAULT_SELECTION_SHORTCUT.to_string();
+                    if let Err(fallback_error) = apply_shortcuts(&handle, &runtime_cfg) {
+                        kdlog!(error, "shortcut", "默认快捷键回退也失败: {fallback_error}");
+                    }
+                }
+                kdlog!(warn, "shortcut", "启动快捷键回退：{e}；划词搜索已关闭");
+                {
+                    let state: State<AppState> = handle.state();
+                    *state.cfg.lock().expect("cfg lock") = runtime_cfg.clone();
+                    *state.startup_warning.lock().expect("startup warning lock") = Some(format!(
+                        "快捷键注册失败，已暂时关闭划词搜索并回退可用绑定：{e}"
+                    ));
+                }
+                config::save(&handle, &runtime_cfg);
             }
 
             // 后台校验/构建索引（已建好则 stat 秒过），并挂多根文件监听
@@ -2516,4 +2809,78 @@ pub fn run() {
                 save_position_final(app);
             }
         });
+}
+
+#[cfg(test)]
+mod selection_integration_tests {
+    use super::*;
+
+    #[test]
+    fn empty_shortcuts_use_independent_defaults() {
+        let mut cfg = Config::default();
+        cfg.selection_search_enabled = true;
+        cfg.shortcut.clear();
+        cfg.selection_shortcut.clear();
+        normalize_shortcut_config(&mut cfg);
+        assert_eq!(cfg.shortcut, config::DEFAULT_SHORTCUT);
+        assert_eq!(cfg.selection_shortcut, config::DEFAULT_SELECTION_SHORTCUT);
+        assert!(!shortcuts_conflict(&cfg));
+    }
+
+    #[test]
+    fn selection_shortcut_conflict_is_case_insensitive_and_optional() {
+        let mut cfg = Config::default();
+        cfg.selection_search_enabled = true;
+        cfg.shortcut = "Alt+Space".into();
+        cfg.selection_shortcut = "alt+space".into();
+        assert!(shortcuts_conflict(&cfg));
+        cfg.selection_search_enabled = false;
+        assert!(!shortcuts_conflict(&cfg));
+    }
+
+    #[test]
+    fn import_diff_reports_selection_changes_and_clipboard_risk() {
+        let current = Config::default();
+        let mut incoming = Config::default();
+        incoming.selection_search_enabled = true;
+        incoming.selection_shortcut = "Alt+Shift+S".into();
+        incoming.selection_clipboard_fallback = true;
+        let (summary, warnings) = diff_configs(&current, &incoming);
+        assert!(summary.iter().any(|line| line.contains("划词搜索：关 → 开")));
+        assert!(summary.iter().any(|line| line.contains("划词快捷键")));
+        assert!(summary.iter().any(|line| line.contains("Ctrl+C 回退：关 → 开")));
+        assert!(warnings.iter().any(|line| line.contains("图片/文件/富文本")));
+    }
+
+    #[test]
+    fn busy_selection_coalesces_to_latest_request() {
+        let mut control = SelectionControl { busy: true, latest_id: 4 };
+        assert_eq!(latest_selection_retry(&mut control, 1), Some(4));
+        assert_eq!(latest_selection_retry(&mut control, 4), None);
+    }
+
+    #[test]
+    fn window_fit_shrinks_oversized_panel_to_work_area() {
+        let areas = [ScreenArea { x: 0, y: 0, width: 1920, height: 1040 }];
+        assert_eq!(
+            fit_window_to_area(100, 900, 600, 1400, &areas),
+            Some((100, 0, 600, 1040))
+        );
+        assert_eq!(
+            fit_window_to_area(-50, -20, 2200, 1200, &areas),
+            Some((0, 0, 1920, 1040))
+        );
+    }
+
+    #[test]
+    fn window_fit_uses_most_overlapping_monitor() {
+        let areas = [
+            ScreenArea { x: -1920, y: 0, width: 1920, height: 1080 },
+            ScreenArea { x: 0, y: 0, width: 1920, height: 1040 },
+        ];
+        assert_eq!(
+            fit_window_to_area(-100, 100, 300, 600, &areas),
+            Some((0, 100, 300, 600))
+        );
+    }
 }

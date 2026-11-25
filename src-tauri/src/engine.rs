@@ -570,11 +570,37 @@ impl Engine {
         type_filter: Option<&str>,
         root_filter: Option<&str>,
     ) -> SearchResponse {
+        self.search_inner(query, limit, type_filter, root_filter, false)
+    }
+
+    /// 划词等外部选择文本按普通词检索，不解释 @、+/-、字段、短语或 mtime 语法。
+    pub fn search_literal(
+        &self,
+        query: &str,
+        limit: usize,
+        type_filter: Option<&str>,
+        root_filter: Option<&str>,
+    ) -> SearchResponse {
+        self.search_inner(query, limit, type_filter, root_filter, true)
+    }
+
+    fn search_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        type_filter: Option<&str>,
+        root_filter: Option<&str>,
+        literal: bool,
+    ) -> SearchResponse {
         let q = query.trim();
         if q.is_empty() {
             return SearchResponse { hits: Vec::new(), terms: Vec::new(), duration_ms: 0 };
         }
-        let adv = parse_advanced(q);
+        let adv = if literal {
+            Advanced { normal: vec![q.to_string()], ..Default::default() }
+        } else {
+            parse_advanced(q)
+        };
 
         // 语法显式限定覆盖 chips/HTTP 参数
         let type_filter = adv.type_f.as_deref().or(type_filter);
@@ -935,4 +961,82 @@ pub fn make_snippet(text: &str, terms: &[String]) -> String {
         s.push('…');
     }
     s.replace('\n', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_literal_fixture(test: impl FnOnce(&Engine)) {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "kd-engine-literal-{}-{nonce}",
+            std::process::id()
+        ));
+        let engine = Engine::open_or_create(&dir, HashMap::new(), HashSet::new()).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let old = now.saturating_sub(10 * 365 * 86_400_000);
+        let docs = [
+            ("普通标题", "Note", "Alpha", "必须 排除 字面量标记", now),
+            ("其他标题", "Law", "Beta", "必须 字面量标记", now),
+            ("旧文档", "Manual", "Gamma", "字面量标记", old),
+        ];
+        {
+            let mut writer = engine.writer.lock().unwrap();
+            for (index, (title, doc_type, root, text, mtime)) in docs.iter().enumerate() {
+                engine.add_doc(
+                    &mut writer,
+                    &DocumentChunk {
+                        doc_type: (*doc_type).into(),
+                        breadcrumbs: vec!["字面量测试".into()],
+                        title: (*title).into(),
+                        path: format!("{index}.md"),
+                        abs: format!("{}/{}", dir.display(), index),
+                        text: (*text).into(),
+                        line: 1,
+                    },
+                    root,
+                    *mtime,
+                );
+            }
+            writer.commit().unwrap();
+        }
+        engine.reader.reload().unwrap();
+        test(&engine);
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn literal_search_ignores_advanced_operators_and_time_window() {
+        with_literal_fixture(|engine| {
+            let query = "root:Alpha +必须 -排除 title:普通 mtime:>36500d 字面量标记";
+            let literal = engine.search_literal(query, 10, None, None);
+            assert_eq!(literal.hits.len(), 3, "选区中的语法字符必须按普通文本检索");
+            assert!(literal.hits.iter().any(|hit| hit.title == "旧文档"));
+
+            let advanced = engine.search(query, 10, None, None);
+            assert!(advanced.hits.is_empty(), "同一查询在高级语法模式下应被条件排除");
+        });
+    }
+
+    #[test]
+    fn literal_search_still_honors_explicit_type_and_root_filters() {
+        with_literal_fixture(|engine| {
+            let result = engine.search_literal(
+                "字面量标记",
+                10,
+                Some("Law"),
+                Some("Beta"),
+            );
+            assert_eq!(result.hits.len(), 1);
+            assert_eq!(result.hits[0].title, "其他标题");
+        });
+    }
 }

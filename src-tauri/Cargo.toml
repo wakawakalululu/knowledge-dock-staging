@@ -1,6 +1,6 @@
 [package]
 name = "knowledge-dock"
-version = "0.8.41"
+version = "0.8.42"
 description = "uTools 风格的本地知识库悬浮检索工具"
 edition = "2021"
 # 存在额外 bin（sync_diag 诊断工具）时，tauri build 需显式主二进制
@@ -28,6 +28,18 @@ jieba-rs = "0.7"
 pulldown-cmark = "0.13"
 regex = "1"
 once_cell = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 划词搜索：复用 Tauri 已依赖的 windows 0.62 绑定；仅 Windows UI Automation/Win32，无网络功能。
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 [profile.release]
 strip = true

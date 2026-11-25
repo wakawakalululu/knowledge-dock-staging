@@ -8,10 +8,42 @@ WORKFLOW="${LOOP_WORKFLOW:-build-loop.yml}"
 BRANCH="${LOOP_BRANCH:-staging}"
 ARTIFACT="${LOOP_ARTIFACT:-knowledge-dock-windows-loop}"
 API="https://api.github.com/repos/$REPO"
-NODE_BIN="${NODE_BIN:-/mnt/c/Program Files/nodejs/node.exe}"
-GIT_BIN="${GIT_BIN:-/mnt/c/Program Files/Git/cmd/git.exe}"
-POWERSHELL_BIN="${POWERSHELL_BIN:-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe}"
-MSYS_BASH="${MSYS_BASH:-/mnt/c/msys64/usr/bin/bash.exe}"
+if [[ -z "${NODE_BIN:-}" ]]; then
+  if [[ -x "/mnt/c/Program Files/nodejs/node.exe" ]]; then
+    NODE_BIN="/mnt/c/Program Files/nodejs/node.exe"
+  elif [[ -x "/c/Program Files/nodejs/node.exe" ]]; then
+    NODE_BIN="/c/Program Files/nodejs/node.exe"
+  else
+    NODE_BIN="$(command -v node || true)"
+  fi
+fi
+if [[ -z "${GIT_BIN:-}" ]]; then
+  if [[ -x "/mnt/c/Program Files/Git/cmd/git.exe" ]]; then
+    GIT_BIN="/mnt/c/Program Files/Git/cmd/git.exe"
+  elif [[ -x "/c/Program Files/Git/cmd/git.exe" ]]; then
+    GIT_BIN="/c/Program Files/Git/cmd/git.exe"
+  else
+    GIT_BIN="$(command -v git || true)"
+  fi
+fi
+if [[ -z "${POWERSHELL_BIN:-}" ]]; then
+  if [[ -x "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]]; then
+    POWERSHELL_BIN="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  elif [[ -x "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]]; then
+    POWERSHELL_BIN="/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  else
+    POWERSHELL_BIN="$(command -v powershell.exe || true)"
+  fi
+fi
+if [[ -z "${MSYS_BASH:-}" ]]; then
+  if [[ -x "/mnt/c/msys64/usr/bin/bash.exe" ]]; then
+    MSYS_BASH="/mnt/c/msys64/usr/bin/bash.exe"
+  elif [[ -x "/c/msys64/usr/bin/bash.exe" ]]; then
+    MSYS_BASH="/c/msys64/usr/bin/bash.exe"
+  else
+    MSYS_BASH="$(command -v bash || true)"
+  fi
+fi
 TMP_DIR=""
 
 cleanup() {
@@ -29,6 +61,8 @@ fail() {
 win_path() {
   if command -v wslpath >/dev/null 2>&1; then
     wslpath -w "$1"
+  elif command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
   else
     printf '%s\n' "$1"
   fi
@@ -92,13 +126,25 @@ precheck() {
 
   run_node "$(win_path "$ROOT/tools/check-versions.js")"
   run_node --check "$(win_path "$ROOT/ui/app.js")"
+  run_node "$(win_path "$ROOT/tools/selection-ui-test.js")"
+  run_node "$(win_path "$ROOT/tools/selection-ui-test.js")" once
+  run_node "$(win_path "$ROOT/tools/selection-ui-test.js")" always
 
-  if [[ -x "$MSYS_BASH" && "$ROOT" == /mnt/c/* ]]; then
-    local msys_root="/c${ROOT#/mnt/c}"
-    local quoted_manifest_dir
-    printf -v quoted_manifest_dir '%q' "$msys_root/src-tauri"
-    "$MSYS_BASH" -lc \
-      "export PATH=/c/msys64/ucrt64/bin:/c/Users/Admin/.cargo/bin:\$PATH; cd $quoted_manifest_dir; cargo check --locked"
+  if [[ -x "$MSYS_BASH" ]]; then
+    local msys_root
+    if [[ "$ROOT" == /mnt/c/* ]]; then
+      msys_root="/c${ROOT#/mnt/c}"
+    else
+      msys_root="$ROOT"
+    fi
+    if [[ "$msys_root" == /c/* ]]; then
+      local quoted_manifest_dir
+      printf -v quoted_manifest_dir '%q' "$msys_root/src-tauri"
+      "$MSYS_BASH" -lc \
+        "export PATH=/c/msys64/ucrt64/bin:/c/Users/Admin/.cargo/bin:\$PATH; cd $quoted_manifest_dir; cargo check --locked"
+    else
+      (cd "$ROOT/src-tauri" && cargo check --locked)
+    fi
   else
     (cd "$ROOT/src-tauri" && cargo check --locked)
   fi

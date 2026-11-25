@@ -16,6 +16,7 @@ window.addEventListener("unhandledrejection", (e) => {
 });
 
 const $q = document.getElementById("q");
+const $appBanner = document.getElementById("app-banner");
 const $bar = document.getElementById("bar");
 const $btnClear = document.getElementById("btn-clear");
 const $btnAi = document.getElementById("btn-ai");
@@ -42,6 +43,9 @@ const $setMaxage = document.getElementById("set-maxage");
 const $setExts = document.getElementById("set-exts");
 const $setMaxkb = document.getElementById("set-maxkb");
 const $setShortcut = document.getElementById("set-shortcut");
+const $setSelectionEnabled = document.getElementById("set-selection-enabled");
+const $setSelectionShortcut = document.getElementById("set-selection-shortcut");
+const $setSelectionFallback = document.getElementById("set-selection-fallback");
 const $setWidth = document.getElementById("set-width");
 const $setPin = document.getElementById("set-pin");
 const $setSynonyms = document.getElementById("set-synonyms");
@@ -75,6 +79,9 @@ let loadingMore = false;  // 无限滚动防重入
 let activePreset = null;  // 当前生效的范围预设（快捷 chips 高亮；手动保存设置后清除）
 let sortMode = "rel";     // 结果显示：rel 相关度 | mtime 最近修改 | group 按库分组
 let searchSeq = 0;        // 搜索请求序号：过期响应丢弃（快速输入竞态守卫）
+let selectionQueryActive = false; // 划词文本按字面量检索且不记录历史
+let lastSelectionRequestId = 0; // 丢弃重复或乱流的旧划词事件
+let appBannerTimer = null;
 let indexBounceTimer = null; // index-updated 防抖计时器
 
 const TYPE_LABEL = { Law: "法律", Manual: "文档", QA: "问答", Note: "笔记" };
@@ -192,6 +199,7 @@ function renderHistory() {
     .join("");
   $historyList.querySelectorAll(".history-item").forEach((el) => {
     el.addEventListener("click", () => {
+      selectionQueryActive = false;
       $q.value = el.dataset.q;
       $btnClear.hidden = false;
       $historyPanel.hidden = true;
@@ -610,9 +618,52 @@ function updateView() {
 }
 
 /* ---------- 动作 ---------- */
-async function doSearch() {
+function showAppBanner(message) {
+  if (!message || !$appBanner) return;
+  $appBanner.textContent = String(message);
+  $appBanner.hidden = false;
+  clearTimeout(appBannerTimer);
+  appBannerTimer = setTimeout(() => { $appBanner.hidden = true; }, 7000);
+}
+
+function applySelectionSearch(payload) {
+  const requestId = Number(payload && payload.request_id) || 0;
+  if (requestId > 0) {
+    if (requestId <= lastSelectionRequestId) return;
+    lastSelectionRequestId = requestId;
+  }
+  const text = String((payload && payload.text) || "").trim();
+  if (!text) return;
+  clearTimeout(debounceTimer);
+  clearTimeout(indexBounceTimer);
+  composing = false; // 新选区取代搜索框尚未提交的 IME 组合
+  searchSeq += 1; // 立即作废之前输入或上一次划词的迟到响应
+  selectionQueryActive = true;
+  settingsOpen = false;
+  $historyPanel.hidden = true;
+  $q.value = text;
+  $btnClear.hidden = false;
+  hits = [];
+  appHits = [];
+  active = -1;
+  lastTerms = [];
+  lastQuery = text;
+  aiOn = false;
+  aiKeep = null;
+  ctxCache = {};
+  ctxOpen = {};
+  foldExpanded.clear();
+  updateView();
+  $q.focus();
+  doSearch({ literal: true, recordHistory: false });
+  if (payload && payload.warning) showAppBanner(payload.warning);
+}
+
+async function doSearch({ literal = false, recordHistory = true } = {}) {
   const raw = $q.value;
   if (!raw.trim()) {
+    searchSeq += 1;
+    selectionQueryActive = false;
     hits = [];
     appHits = [];
     active = -1;
@@ -624,23 +675,29 @@ async function doSearch() {
     updateView();
     return;
   }
-  const parsed = parseScopePrefix(raw);
+  const useLiteral = literal || selectionQueryActive;
+  const parsed = useLiteral
+    ? { q: raw, typeF: typeFilter, rootF: rootFilter, hit: false }
+    : parseScopePrefix(raw);
   lastQuery = parsed.q;
   updateScopeIndicator(parsed);
   const seq = ++searchSeq; // 本次请求的序号；响应到达时若已过期则丢弃
   let r;
   try {
-    [r, appHits] = await Promise.all([
+    const [response, apps] = await Promise.all([
       invoke("search", {
         q: parsed.q,
         typeFilter: parsed.typeF === "all" ? null : parsed.typeF,
         rootFilter: parsed.rootF === "all" ? null : parsed.rootF,
         limit: searchLimit,
+        literal: useLiteral,
       }),
       parsed.q
         ? invoke("search_apps", { q: parsed.q, limit: 8 }).catch(() => [])
         : Promise.resolve([]),
     ]);
+    r = response;
+    if (seq === searchSeq) appHits = apps;
   } catch (e) {
     if (seq === searchSeq) {
       hits = [];
@@ -649,7 +706,7 @@ async function doSearch() {
     }
     return;
   }
-  if (seq !== searchSeq) return; // 已有更新的请求，丢弃过期响应
+  if (seq !== searchSeq) return; // 已有更新的请求，丢弃过期响应（含应用结果）
   hits = r.hits;
   lastTerms = r.terms || [];
   // 新结果集：AI 筛选与上下文缓存一并失效
@@ -657,6 +714,7 @@ async function doSearch() {
   aiKeep = null;
   ctxCache = {};
   ctxOpen = {};
+  foldExpanded.clear();
   active = appHits.length || hits.length ? 0 : -1;
   // 关键：用 updateView 展开窗口+显示结果面板（仅 render 不改窗口形态，
   // 曾导致"输入后搜索在后台跑但界面无反应"）
@@ -682,7 +740,7 @@ async function doSearch() {
     $resList.appendChild(hint);
   }
   updateAiBtn();
-  recordSearch(parsed.q);
+  if (recordHistory && !selectionQueryActive) recordSearch(parsed.q);
 }
 
 /* ---------- AI 精选（Phase 1） ---------- */
@@ -733,6 +791,10 @@ if ($btnFold) {
 }
 
 function clearInput() {
+  clearTimeout(debounceTimer);
+  clearTimeout(indexBounceTimer);
+  searchSeq += 1;
+  selectionQueryActive = false;
   $q.value = "";
   $btnClear.hidden = true;
   hits = [];
@@ -740,8 +802,11 @@ function clearInput() {
   active = -1;
   lastTerms = [];
   lastQuery = "";
+  aiOn = false;
+  aiKeep = null;
   ctxCache = {};
   ctxOpen = {};
+  foldExpanded.clear();
   updateScopeIndicator({ rootF: "all", typeF: "all" });
   updateView();
 }
@@ -889,6 +954,17 @@ function renderDavList() {
     .join("");
 }
 
+function syncGeneralSettings() {
+  if (!cfg) return;
+  $setShortcut.value = cfg.shortcut || "Alt+Space";
+  $setSelectionEnabled.checked = !!cfg.selection_search_enabled;
+  $setSelectionShortcut.value = cfg.selection_shortcut || "Alt+Shift+Space";
+  $setSelectionFallback.checked = !!cfg.selection_clipboard_fallback;
+  $setSelectionFallback.disabled = !cfg.selection_search_enabled;
+  $setWidth.value = cfg.width;
+  $setPin.checked = cfg.pin_mode;
+}
+
 function openSettings() {
   settingsOpen = true;
   renderPresetSelect();
@@ -903,9 +979,7 @@ function openSettings() {
     $setMaxage.value = (cfg.scope && cfg.scope.max_age_days) || 0;
     $setExts.value = (cfg.scope && cfg.scope.include_exts ? cfg.scope.include_exts : ["md", "markdown", "txt"]).join(", ");
     $setMaxkb.value = (cfg.scope && cfg.scope.max_file_kb) || 4096;
-    $setShortcut.value = cfg.shortcut;
-    $setWidth.value = cfg.width;
-    $setPin.checked = cfg.pin_mode;
+    syncGeneralSettings();
     const ai = cfg.ai || {};
     $aiEnabled.checked = !!ai.enabled;
     $aiBaseUrl.value = ai.base_url || "";
@@ -940,6 +1014,10 @@ function activateTab(name) {
 }
 
 /* ---------- 事件绑定 ---------- */
+$setSelectionEnabled.addEventListener("change", () => {
+  $setSelectionFallback.disabled = !$setSelectionEnabled.checked;
+});
+
 /* 自动搜索：输入即搜（150ms 防抖）；中文输入法合成期间不触发，选词完成立即搜 */
 let composing = false;
 $q.addEventListener("compositionstart", () => { composing = true; });
@@ -949,6 +1027,8 @@ $q.addEventListener("compositionend", () => {
   debounceTimer = setTimeout(doSearch, 50);
 });
 $q.addEventListener("input", () => {
+  selectionQueryActive = false;
+  searchSeq += 1; // 输入一旦变化立即作废旧划词/防抖请求，不等下一次搜索发出
   $btnClear.hidden = !$q.value;
   $historyPanel.hidden = !!$q.value.trim();
   if (composing) return;
@@ -1475,6 +1555,9 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
       knowledge_dirs: dirs,
       knowledge_dir: dirs[0] ?? null,
       shortcut: $setShortcut.value.trim() || cfg.shortcut,
+      selection_search_enabled: $setSelectionEnabled.checked,
+      selection_shortcut: $setSelectionShortcut.value.trim() || cfg.selection_shortcut || "Alt+Shift+Space",
+      selection_clipboard_fallback: $setSelectionEnabled.checked && $setSelectionFallback.checked,
       width: Number($setWidth.value) || cfg.width,
       pin_mode: $setPin.checked,
       ai: {
@@ -1487,6 +1570,7 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
       },
     };
     cfg = await invoke("save_config", { cfg: next });
+    syncGeneralSettings();
     applyPin();
     renderRootChips();
     // 手动保存设置后范围可能已偏离预设，清除快捷 chips 高亮
@@ -1668,20 +1752,31 @@ listen("index-error", (ev) => {
   $stats.textContent = "索引失败: " + msg.slice(0, 120);
 });
 
-/* 后端唤起（快捷键/二次启动/托盘）→ 复位为折叠形态 */
-listen("ui-reset", () => {
-  $q.value = "";
-  $btnClear.hidden = true;
-  hits = [];
-  active = -1;
-  lastTerms = [];
-  lastQuery = "";
-  ctxCache = {};
-  ctxOpen = {};
-  settingsOpen = false;
-  updateView();
-  $q.focus();
-});
+/* 启动事件：后端保证这些监听器就绪前的事件不会丢失 */
+async function registerStartupListener(name, handler) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await listen(name, handler);
+    } catch (e) {
+      lastError = e;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  throw new Error(`${name}: ${lastError}`);
+}
+
+// 提前吸收拒绝，避免配置/索引初始化较慢时出现 unhandledrejection。
+const frontendListenersReady = Promise.all([
+  registerStartupListener("selection-search", (ev) => applySelectionSearch(ev.payload)),
+  registerStartupListener("selection-search-error", (ev) => showAppBanner(ev.payload)),
+  registerStartupListener("app-warning", (ev) => showAppBanner(ev.payload)),
+  registerStartupListener("ui-reset", () => {
+    settingsOpen = false;
+    clearInput();
+    $q.focus();
+  }),
+]).then(() => null, (e) => e);
 
 /* ---------- 初始化 ---------- */
 (async () => {
@@ -1692,9 +1787,7 @@ listen("ui-reset", () => {
     $setMaxage.value = (cfg.scope && cfg.scope.max_age_days) || 0;
     $setExts.value = (cfg.scope && cfg.scope.include_exts ? cfg.scope.include_exts : ["md", "markdown", "txt"]).join(", ");
     $setMaxkb.value = (cfg.scope && cfg.scope.max_file_kb) || 4096;
-    $setShortcut.value = cfg.shortcut;
-    $setWidth.value = cfg.width;
-    $setPin.checked = cfg.pin_mode;
+    syncGeneralSettings();
     applyPin();
     renderRootsEditor();
     renderRootChips();
@@ -1718,8 +1811,15 @@ listen("ui-reset", () => {
   healthPatrol();
   updateScopeIndicator(parseScopePrefix($q.value));
   updateAiBtn();
-  // 通知主进程：前端就绪，可以显示窗口（避免 webview 未加载完的黑屏/闪块）
-  invoke("frontend_ready").catch(() => {});
+  // 只有全部关键监听器注册成功才放行后端队列；失败时保持 ready=false，
+  // 让 3 秒兜底显窗可见，但不会静默丢掉排队划词事件。
+  const listenerError = await frontendListenersReady;
+  if (listenerError) {
+    showAppBanner("启动事件监听失败: " + listenerError);
+    return;
+  }
+  // 通知主进程：前端就绪，可以显示窗口并放行排队事件。
+  await invoke("frontend_ready").catch((e) => showAppBanner("前端就绪通知失败: " + e));
 })();
 
 /* 索引统计仪表盘 */

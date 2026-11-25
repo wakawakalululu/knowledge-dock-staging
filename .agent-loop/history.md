@@ -34,3 +34,25 @@
 - **UI 与清理**: 单实例唤回后窗口句柄非零，600×76 搜索框截图 `.local-logs/audit_20261125T092144Z.ui.png` 已人工查看；PID 75528 已停止，18230 无 LISTEN，无残留 portable 进程。
 - **单测阻塞**: 现有测试 exe 包含目标用例，但 Windows 退出码 `-1073741511 (0xC0000139)`；补充 DLL 搜索路径与同目录 `WebView2Loader.dll` 均未修复。`cargo test` 重建进一步被 C 盘 `os error 112` 阻塞；F 盘虽显示 20GB 空闲，但当前 `scdfs` 挂载不可写。单测未通过，不计为验证成功。
 - **下一步行动**: 产品层收官完成；单测环境需在获得可写构建盘或清理 C 盘后继续排查，本轮不再推送第 4 次构建。
+
+### Iteration #3 - 2026-11-25T06:57:00Z
+
+- **Commit**: 待提交（v0.8.42 工作树，基线 `7551f15`）。
+- **改动要点**: 接入可选划词自动搜索；UIA 只读优先、Ctrl+C 纯文本快照/恢复回退、字面量检索、不写历史、独立快捷键与失败回滚；成功/失败共用有序事件队列，失败也显窗提示；前端补 IME、chips 保留、竞态与启动监听回归；Windows 绑定统一为 0.62；驱动脚本兼容原生 Git Bash 与 WSL 路径。
+- **CI 状态**: 尚未开始；本轮尚未 commit/push。
+- **本地门禁**: `loop_driver.sh precheck` 退出码 0，输出 `PRECHECK_OK 7551f15d28e6f0f6a0cbfdf41b4d1403e27b8d92`；六处版本一致、前端语法、`SELECTION_UI_OK`、`cargo check --locked` 均通过。`cargo check --tests --locked` 通过，仅保留两个存量 warning。
+- **配置诊断**: `import_diag` 成功解析旧配置与含划词字段的待导入配置，输出划词开关/快捷键/回退差异及 Ctrl+C 风险警告；未改写用户当前配置。
+- **UI 证据**: 本机 Chrome 无头 + Tauri mock 输出 `UI_SMOKE_OK 默认关闭/设置保存/字面量/不写历史/失败提示`；默认折叠截图 `.local-logs/ui-selection-default.png` 无额外覆盖层，通用设置截图 `.local-logs/ui-selection-settings.png` 已人工查看。
+- **单测阻塞**: Rust 测试 exe 仍为 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未进入断言，不计为单测通过。
+- **下一步行动**: 提交 v0.8.42，仅推 staging；等待 CI 后下载产物，执行真实 UIA/剪贴板/配置落盘与检索回归。
+
+### Iteration #3 本地安全复核 - 2026-11-25T12:06:30Z
+
+- **Commit**: 待提交（工作树在基线 `7551f15` 之上）。
+- **改动要点**: 剪贴板恢复改为清空前准备主副本与完整备份，并在首次重放失败时完整重试；快照与 Ctrl+C 结果均等待 `CloseClipboard` 后的稳定序列号，避免系统延迟提交格式造成旧序列号误判；连续触发合并为最新请求，结果带单调 `request_id`，窗口按显示器工作区约束完整显示。人工复核另修正序列号持续变化时的等待节流，以及 2000 字符边界可能留下的尾随空格。
+- **本地门禁**: 删除临时探针源文件后，`loop_driver.sh precheck` 退出码 0（6 处版本、三种前端回归、`cargo check --locked`）；`cargo check --tests --locked` 通过，仅有两个存量 warning。
+- **实机安全证据**: 临时 Rust 探针实际执行并通过归一化/2000 字符/UTF-16/格式白名单/恢复告警断言；当前 `selection.rs` 的真实快照恢复路径通过，原始纯文本逐字恢复；自定义格式、图片、文件、富文本均在 Ctrl+C 注入前拒绝且原内容保留，测试 finally 恢复原始剪贴板。
+- **序列号诊断**: 实测 `CloseClipboard` 后序列号从 12555 增至 12558，证明必须使用关窗后的稳定值；修复后直接恢复测试通过。
+- **实机缺口**: 当前工具桌面下原生 `EDIT` 即使获得前台/焦点，`EM_GETSEL` 仍为 `0,0`，UIA 提供方不暴露 TextPattern，真实键盘与直接 `EM_SETSEL` 均未形成选区；真实 Notepad 复测同样为 `NOTEPAD_SELECTION 0,0`、焦点匹配但 UIA 类型为 `Pane` 且无 TextPattern。因此 UIA 正向读取与 Ctrl+C 正向复制链路仍未验证通过，不能计为成功。
+- **单测状态**: 测试目标仅完成编译；测试 exe 启动错误 `0xc0000139` 未重新证明解决，未报告 `cargo test` 全套通过。
+- **下一步行动**: 完成独立代码审查后提交，仅推 staging；推送仍须以最新工作树 precheck 退出码 0 为前提。

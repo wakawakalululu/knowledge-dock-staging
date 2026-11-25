@@ -10,6 +10,7 @@
   <div class="app">
     <!-- 全局脚本错误条幅（正常时隐藏） -->
     <div id="err-banner" class="err-banner" hidden></div>
+    <div id="app-banner" class="app-banner" role="status" aria-live="polite" hidden></div>
     <!-- 极简搜索条：拖拽区域仅限左侧图标（避免拦截按钮点击） -->
     <div class="bar-card" id="bar">
       <span class="s-icon drag-zone" data-tauri-drag-region title="拖动移动窗口">
@@ -192,6 +193,22 @@
         <div class="set-row">
           <span class="lbl">全局快捷键</span>
           <input id="set-shortcut" class="set-input" type="text" placeholder="Alt+Space" spellcheck="false" />
+        </div>
+        <div class="set-col">
+          <label class="set-row check">
+            <input id="set-selection-enabled" type="checkbox" />
+            <span>启用划词搜索</span>
+          </label>
+          <div class="set-row">
+            <span class="lbl">划词快捷键</span>
+            <input id="set-selection-shortcut" class="set-input" type="text" placeholder="Alt+Shift+Space" spellcheck="false" />
+          </div>
+          <span class="lbl-line dim">在其它应用中选中文本后按此键。优先用 Windows UI Automation 只读选区，不修改剪贴板；选中内容按字面量检索，不写入搜索历史。</span>
+          <label class="set-row check">
+            <input id="set-selection-fallback" type="checkbox" />
+            <span>允许 Ctrl+C 回退（默认关闭）</span>
+          </label>
+          <span class="lbl-line dim">仅当 UI Automation 读不到选区时模拟 Ctrl+C，并恢复原纯文本剪贴板；遇到图片、文件、富文本或自定义格式会直接拒绝，避免破坏剪贴板。</span>
         </div>
         <div class="set-row">
           <span class="lbl">宽度 (px)</span>

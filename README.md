@@ -28,6 +28,7 @@ uTools 风格的本地知识库/应用/工具一体化检索悬浮窗：一条**
 
 **系统集成**
 - 全局快捷键（默认 `Alt+Space` 唤起/隐藏切换）、失焦自动隐藏、钉住模式、窗口位置/宽度记忆
+- **可选划词自动搜索**：默认关闭；优先用 Windows UI Automation 只读选区，字面量检索且不写搜索历史
 - 系统托盘：显示/隐藏、钉住切换、重新扫描、**开机自启**、打开配置目录、HTTP 接口状态
 - **本地 HTTP 检索接口**（默认 `127.0.0.1:18230`）：供 CTF 答题脚本等外部程序直接调用
 - 运行日志按天滚动落盘 + 设置面板一键打开日志目录 + `/api/logs` 远程查看
@@ -79,6 +80,15 @@ uTools 风格的本地知识库/应用/工具一体化检索悬浮窗：一条**
 | `mtime:>Nd` / `mtime:<Nd` | `注入 mtime:>7d` | 最近/早于 N 天修改的文件；时间窗在索引排名前过滤，不受 Top-N 截断影响 |
 
 可自由组合：`"模板注入" root:des-ctf-knowledge type:manual -articles`。HTTP 接口同样支持（`q=` 内含语法）。
+
+### 划词自动搜索（可选）
+
+1. 设置 → 通用 → 勾选 **启用划词搜索**；默认快捷键为 `Alt+Shift+Space`，可自行改键，但不能与 `Alt+Space` 显隐键相同。
+2. 在记事本、浏览器或其它支持 Windows UI Automation 的应用中选中文本，再按划词快捷键；悬浮窗会显示、聚焦并自动检索。
+3. 选区始终按**字面量**搜索：`@库名`、`+必须`、`-排除`、`title:`、`mtime:` 等不会被解释为语法；当前已选中的类型/知识库 chips 仍然生效。划词内容不会写入搜索历史。
+4. 默认仅通过 UI Automation 只读选区，不修改剪贴板。只有显式勾选 **允许 Ctrl+C 回退** 后，才会在不支持 UI Automation 时模拟复制；遇到图片、文件、富文本或自定义剪贴板格式会直接拒绝，纯文本则快照并恢复。
+
+选区会压缩空白并限制为 2000 个字符。回退会等待剪贴板序列号稳定，复核内容仍来自原前台窗口，并预先准备主副本与完整备份后再恢复；恢复失败或剪贴板已被其它操作更新时会显示提示，不会覆盖更新的剪贴板内容。连续触发会合并为最新选区，旧请求结果不会覆盖新结果。未检测到可读取选区或采集失败时，悬浮窗会显窗并在提示条中说明原因。
 
 ### 树状折叠
 
@@ -158,7 +168,10 @@ for item in ask("SSTI 模板注入 检测 payload"):
 | `presets[]` | — | 范围预设（一键切换知识库组合） |
 | `ai` | 关闭 | `{enabled, base_url, api_key(dpapi:密文), model, timeout_ms, top_n}` |
 | `api` | 启用 | `{enabled, port(18230), token}`；改动需重启 |
-| `shortcut` | Alt+Space | 全局快捷键 |
+| `shortcut` | Alt+Space | 窗口显隐全局快捷键 |
+| `selection_search_enabled` | false | 启用划词自动搜索 |
+| `selection_shortcut` | Alt+Shift+Space | 独立划词快捷键；不能与 `shortcut` 相同 |
+| `selection_clipboard_fallback` | false | 显式允许 Ctrl+C 回退；仅处理可快照的纯文本剪贴板 |
 | `width` / `pin_mode` / `x` / `y` | 600 / false | 窗口形态 |
 
 ## 从源码构建
@@ -176,7 +189,7 @@ npm run tauri build    # 或直接推送到 GitHub，由 Actions 构建并发布
 
 - **[`BASELINE.md`](BASELINE.md)**：权威工程基线——开发环境、迭代闭环（改 → 检查 → 推 staging → CI → 下载产物 → 实机验证）、版本与发布规则、验证标准、已知环境坑
 - **[`AGENTS.md`](AGENTS.md)**：agent/协作者必须遵循的最简执行约束
-- **[`tools/`](tools/)**：可复现验证脚本——`quiz-test.js`（答题检索回归）、`syntax-test.js`（高级语法回归）、`attach-ctf-source.js`（CTF 知识库接入）
+- **[`tools/`](tools/)**：可复现验证脚本——`quiz-test.js`（答题检索回归）、`syntax-test.js`（高级语法回归）、`selection-ui-test.js`（划词字面量/历史/竞态/启动监听及失败重试回归）、`attach-ctf-source.js`（CTF 知识库接入）
 - 当前工作目录：`C:\Users\Admin\Desktop\code\SerachDock`；推送通道：`staging`（CI 触发），`origin` 待主仓凭证恢复后补发
 
 ## 项目结构（核心）
@@ -185,6 +198,7 @@ npm run tauri build    # 或直接推送到 GitHub，由 Actions 构建并发布
 ui/                     零打包器前端（vanilla JS + 内联 SVG）
 src-tauri/src/
   lib.rs                窗口形态/快捷键/托盘/IPC/文件监听/位置记忆
+  selection.rs          UI Automation 只读划词 + 受控 Ctrl+C 回退
   engine.rs             Tantivy BM25 + jieba + 持久化索引 + 同义词改写
   indexer.rs            差异化切块（法规/手册/问答/笔记 → DocumentChunk）
   matching.rs           范围规则匹配（glob 纯函数）
@@ -201,10 +215,11 @@ scripts/gen-icon.mjs    图标生成（纯 Node 绘制 PNG）
 
 ## 技术栈
 
-Tauri 2（Rust）· Tantivy 0.25 + jieba-rs · pulldown-cmark · notify（文件监听）· WebView2 + 零打包器前端（vanilla JS）· curl CLI（Git/WebDAV/AI 网络层，零额外 Rust 依赖）· std::net（HTTP 接口/日志）· DPAPI（凭据加密）
+Tauri 2（Rust）· Tantivy 0.25 + jieba-rs · pulldown-cmark · notify（文件监听）· Windows UI Automation / Win32（划词与受控剪贴板回退）· WebView2 + 零打包器前端（vanilla JS）· curl CLI（Git/WebDAV/AI 网络层，零额外 Rust 网络依赖）· std::net（HTTP 接口/日志）· DPAPI（凭据加密）
 
 ## 隐私
 
 - 检索、索引、切块全部本地完成；**默认无任何网络请求**
+- 划词搜索默认关闭；UI Automation 只读本机选区，选区按字面量检索且不写入搜索历史
 - 启用 AI 筛选后，命中**摘要**会发送到你配置的模型服务（可用 Ollama 等本地模型保持完全离线）
 - Git/WebDAV 凭据 DPAPI 加密绑定本机，不落明文

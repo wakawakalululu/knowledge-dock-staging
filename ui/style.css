@@ -603,6 +603,23 @@ html, body {
   text-overflow: ellipsis;
 }
 
+/* 非阻断操作提示：默认隐藏，短时展示后自动收起 */
+.app-banner {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 2px;
+  z-index: 98;
+  padding: 5px 10px;
+  border: 1px solid #d97706;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
 /* Git 同步源列表 */
 .git-row {
   display: flex;

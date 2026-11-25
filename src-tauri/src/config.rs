@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 pub const DEFAULT_SHORTCUT: &str = "Alt+Space";
+pub const DEFAULT_SELECTION_SHORTCUT: &str = "Alt+Shift+Space";
 pub const DEFAULT_WIDTH: f64 = 600.0;
 
 /// 范围预设：保存一组知识库根+范围规则的命名快照
@@ -105,6 +106,15 @@ pub struct Config {
     /// 全局快捷键（如 "Alt+Space"）
     #[serde(default = "default_shortcut")]
     pub shortcut: String,
+    /// v0.8.42：可选划词搜索，默认关闭
+    #[serde(default)]
+    pub selection_search_enabled: bool,
+    /// 划词搜索快捷键，独立于窗口显隐快捷键
+    #[serde(default = "default_selection_shortcut")]
+    pub selection_shortcut: String,
+    /// 显式允许 Ctrl+C 回退；默认关闭，仅快照/恢复纯文本格式
+    #[serde(default)]
+    pub selection_clipboard_fallback: bool,
     /// 搜索历史（最近 20 条，最新在前）
     #[serde(default)]
     pub search_history: Vec<String>,
@@ -239,6 +249,9 @@ fn default_width() -> f64 {
 fn default_shortcut() -> String {
     DEFAULT_SHORTCUT.to_string()
 }
+fn default_selection_shortcut() -> String {
+    DEFAULT_SELECTION_SHORTCUT.to_string()
+}
 
 fn config_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     let dir = app.path().app_config_dir().ok()?;
@@ -316,6 +329,9 @@ impl Default for Config {
             width: DEFAULT_WIDTH,
             pin_mode: false,
             shortcut: DEFAULT_SHORTCUT.to_string(),
+            selection_search_enabled: false,
+            selection_shortcut: DEFAULT_SELECTION_SHORTCUT.to_string(),
+            selection_clipboard_fallback: false,
             search_history: Vec::new(),
             presets: Vec::new(),
             git_sources: Vec::new(),
@@ -325,5 +341,31 @@ impl Default for Config {
             api: ApiConfig { enabled: true, port: 18230, token: String::new() },
             expanded_h: 600.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_defaults_selection_search_off() {
+        let cfg: Config = serde_json::from_str("{}").expect("旧配置应可解析");
+        assert!(!cfg.selection_search_enabled);
+        assert!(!cfg.selection_clipboard_fallback);
+        assert_eq!(cfg.selection_shortcut, DEFAULT_SELECTION_SHORTCUT);
+    }
+
+    #[test]
+    fn selection_fields_round_trip() {
+        let mut cfg = Config::default();
+        cfg.selection_search_enabled = true;
+        cfg.selection_shortcut = "Ctrl+Alt+S".into();
+        cfg.selection_clipboard_fallback = true;
+        let json = serde_json::to_string(&cfg).expect("序列化");
+        let loaded: Config = serde_json::from_str(&json).expect("反序列化");
+        assert!(loaded.selection_search_enabled);
+        assert_eq!(loaded.selection_shortcut, "Ctrl+Alt+S");
+        assert!(loaded.selection_clipboard_fallback);
     }
 }

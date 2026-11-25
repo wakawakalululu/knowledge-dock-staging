@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "knowledge-dock"
-version = "0.8.41"
+version = "0.8.42"
 dependencies = [
  "jieba-rs",
  "notify",
@@ -2249,6 +2249,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "walkdir",
+ "windows",
 ]
 
 [[package]]
