@@ -73,9 +73,21 @@
 
 ### Iteration #4 - 2026-11-26T16:44:03Z
 
-- **Commit**: 待提交（基线 `101202a`，v0.8.43）。
+- **Commit**: `863cacc0504ad5c8ae46021d4ee117fa2707f7d1`（v0.8.43，基线 `101202a`）。
 - **改动要点**: 新增统一 `safe_path` 边界校验；WebDAV 集合路径按完整段判断，origin 在解码前校验原始路径边界，下载/子目录请求逐段重编码，拒绝穿越、反斜杠、盘符、绝对路径、大小写别名及保留设备名（含 COM¹/²/³），下载与删除共用安全拼接；Git/WebDAV 来源名覆盖配置加载、保存、Profile、导入、健康检查、同步与删除；非法旧镜像元数据只告警跳过；Git 切分支使用来源命名空间外的唯一临时目录并在网络操作后复核边界；新增/同步/移除统一先锁后读配置；新增 `path_security` 定向测试并加入两个 Windows CI 工作流。
 - **独立复核**: 多轮只读审查修复 origin 编码边界、add 候选配置原子性、WebDAV path 大小写、Git 临时目录碰撞、rename 失败保留、URL 二次解码、reparse 复核与同名 add/remove/sync 竞态后，最终复核 `PASS`。
 - **本地门禁**: `node --check ui/app.js`、`VERSION_OK 0.8.43 (6 locations)`、npm 锁文件校验、三种划词前端回归、`cargo check --tests --locked` 与 `loop_driver.sh precheck` 均通过；仅保留两个存量 warning。
 - **定向测试**: `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib path_security -- --nocapture` 编译成功，但测试 exe 仍在启动阶段退出 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未进入断言，因此不计为本地测试通过。
-- **下一步行动**: 完成独立审查后提交，仅推 staging；以 Windows CI 的定向测试执行结果、产物审计和隔离 mock WebDAV 实机回归作为本轮闭环证据。
+- **下一步行动**: 以 Windows CI 的定向测试执行结果、产物审计和隔离 mock WebDAV 实机回归作为本轮闭环证据。
+
+### Iteration #4 最终实机审计 - 2026-11-26T20:49:00Z
+
+- **代码提交**: `863cacc0504ad5c8ae46021d4ee117fa2707f7d1`；仅推送 `staging`，未推 `origin`，未 amend/force push。
+- **CI 状态**: [run 45875616869](https://github.com/wakawakalululu/knowledge-dock-staging/actions/runs/45875616869) `completed/success`，head SHA 与代码提交完全一致；`Run path security tests` 实际执行并完成，结果为 `18 passed; 0 failed; 0 ignored`。
+- **产物证据**: artifact ZIP 19,128,995 字节，SHA-256 `551a332fc37d5ca5553e862f34f8510a8212f4a8e4088d486e4ce1aaeabc5b57`；portable 21,764,608 字节，SHA-256 `08c2d3e61c499856c97d027ad571285697302f5eea2fea7d3387a2c237151271`；NSIS 10,558,651 字节，SHA-256 `ecab556ea8fa6decd6745dda09a20dd94b5c7d1097e57b25a1a3a5838707aea2`；两个 exe 的 File/Product Version 均为 0.8.43。
+- **WebDAV 实机**: 本地 mock 返回正常 `docs/ok.md` 时下载、元数据、知识根注册与检索通过；`..\`、编码 `..\`、盘符路径、集合前缀兄弟路径均在 GET 前拒绝，目录外哨兵未被创建、覆盖或删除；删除测试源只移除自身镜像与元数据。
+- **配置与导入实机**: `import_diag` 对非法来源非零退出、对合法候选零退出；UI 非法导入明确报错且真实 `config.json` SHA-256 不变；临时隔离标识的 debug 探针直接调用 `save_config`，Git/WebDAV 非法名称均被拒绝，`STATE_UNCHANGED=true` 且配置哈希不变；合法 UI 导入后直接读盘并核对镜像、元数据与检索，再恢复导入前配置。
+- **回归实机**: 答题 9/9、高级语法 10/10；真实 Chrome UIA 选区与无 TextPattern 的 Ctrl+C 回退均将完整字面量写入搜索框，`FocusId=q`、历史 6→6，回退测试 `ClipboardRestored=true`。
+- **清理**: 最终 portable/mock/测试宿主进程数 0，18230/18765 LISTEN 数 0；临时语法根、导入夹具、测试镜像与隔离应用数据已删除；用户配置恢复为原始 SHA-256 `C23723E31910B6739260D3D1D206A7E7CF132D216D505B9C7DDF0D25E8DC29EE`，划词与回退保持默认关闭。
+- **单测状态**: 本地 GNU 测试 exe 的 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND` 仍作为独立环境阻塞保留；本轮测试通过证据来自 Windows CI 的独立执行。
+- **下一步行动**: 产品层闭环，无未解决的产品缺陷；补充本文档后以新的文档提交推 staging，不修改已验证代码提交。
