@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "knowledge-dock"
-version = "0.8.42"
+version = "0.8.43"
 dependencies = [
  "jieba-rs",
  "notify",

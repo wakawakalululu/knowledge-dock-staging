@@ -5,7 +5,7 @@ use knowledge_dock_lib::config::Config;
 
 fn read(path: &str) -> Result<Config, String> {
     let json = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    serde_json::from_str(&json).map_err(|e| format!("{path}: 解析失败 {e}"))
+    Config::from_json(&json).map_err(|e| format!("{path}: 解析/校验失败 {e}"))
 }
 
 fn main() {

@@ -49,6 +49,9 @@ jobs:
           node scripts/gen-icon.mjs
           npx tauri icon scripts/app-icon.png -o src-tauri/icons
 
+      - name: Run path security tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib path_security -- --nocapture
+
       - name: Build dev-release
         run: npm run build:loop
 

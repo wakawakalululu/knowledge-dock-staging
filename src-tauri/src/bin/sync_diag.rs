@@ -7,7 +7,7 @@ fn main() {
     let base = std::path::PathBuf::from(appdata).join("com.local.knowledgedock");
     let cfg_json = std::fs::read_to_string(base.join("config.json")).expect("读 config.json");
     let cfg: knowledge_dock_lib::config::Config =
-        serde_json::from_str(&cfg_json).expect("解析 config.json");
+        knowledge_dock_lib::config::Config::from_json(&cfg_json).expect("解析/校验 config.json");
     println!(
         "roots(enabled)={:?}",
         cfg.effective_roots().iter().map(|r| r.path.clone()).collect::<Vec<_>>()

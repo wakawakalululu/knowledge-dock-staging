@@ -241,6 +241,24 @@ impl Config {
             })
             .collect()
     }
+
+    /// 校验所有会参与本地目录/元数据路径构造的同步源名。
+    pub fn validate(&self) -> Result<(), String> {
+        crate::safe_path::validate_source_names(
+            self.git_sources.iter().map(|source| source.name.as_str()),
+        )?;
+        crate::safe_path::validate_source_names(
+            self.webdav_sources.iter().map(|source| source.name.as_str()),
+        )?;
+        Ok(())
+    }
+
+    /// 配置 JSON 的统一反序列化入口：解析后立即做安全校验。
+    pub fn from_json(json: &str) -> Result<Config, String> {
+        let cfg: Config = serde_json::from_str(json).map_err(|e| format!("配置格式错误: {e}"))?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
 }
 
 fn default_width() -> f64 {
@@ -263,11 +281,11 @@ pub fn load(app: &tauri::AppHandle) -> Config {
         return Config::default();
     };
     let mut cfg: Config = match fs::read_to_string(path) {
-        Ok(s) => match serde_json::from_str(&s) {
+        Ok(s) => match Config::from_json(&s) {
             Ok(c) => c,
-            // 解析失败不静默：打日志可见（外部工具生成的配置容错）
+            // 解析或安全校验失败不静默：保留原文件，打日志后回退默认配置。
             Err(e) => {
-                crate::kdlog!(warn, "config", "config.json 解析失败，回退默认配置: {e}");
+                crate::kdlog!(warn, "config", "config.json 解析/校验失败，回退默认配置: {e}");
                 Config::default()
             }
         },
@@ -308,6 +326,10 @@ fn migrate(cfg: &mut Config) {
 }
 
 pub fn save(app: &tauri::AppHandle, cfg: &Config) {
+    if let Err(e) = cfg.validate() {
+        crate::kdlog!(error, "config", "拒绝写入非法配置: {e}");
+        return;
+    }
     let Some(path) = config_path(app) else { return };
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -367,5 +389,48 @@ mod tests {
         assert!(loaded.selection_search_enabled);
         assert_eq!(loaded.selection_shortcut, "Ctrl+Alt+S");
         assert!(loaded.selection_clipboard_fallback);
+    }
+
+    #[test]
+    fn path_security_config_accepts_legacy_and_safe_sources() {
+        assert!(Config::from_json("{}").is_ok());
+        let cfg = Config::from_json(
+            r#"{
+                "selection_search_enabled": false,
+                "selection_shortcut": "Alt+Shift+Space",
+                "git_sources": [{"name":"repo-1","url":"https://example.com/repo.git"}],
+                "webdav_sources": [{"name":"中文 源","url":"https://example.com/dav"}]
+            }"#,
+        )
+        .unwrap();
+        assert!(!cfg.selection_search_enabled);
+        assert_eq!(cfg.git_sources[0].name, "repo-1");
+        assert_eq!(cfg.webdav_sources[0].name, "中文 源");
+    }
+
+    #[test]
+    fn path_security_config_rejects_unsafe_and_case_colliding_sources() {
+        assert!(Config::from_json(
+            r#"{"git_sources":[{"name":"../evil","url":"https://example.com/repo.git"}]}"#
+        )
+        .is_err());
+        assert!(Config::from_json(
+            r#"{"webdav_sources":[{"name":"..\\evil","url":"https://example.com/dav"}]}"#
+        )
+        .is_err());
+        assert!(Config::from_json(
+            r#"{"git_sources":[
+                {"name":"Repo","url":"https://example.com/a.git"},
+                {"name":"repo","url":"https://example.com/b.git"}
+            ]}"#
+        )
+        .is_err());
+        assert!(Config::from_json(
+            r#"{"webdav_sources":[
+                {"name":"Σ","url":"https://example.com/a"},
+                {"name":"ς","url":"https://example.com/b"}
+            ]}"#
+        )
+        .is_err());
     }
 }

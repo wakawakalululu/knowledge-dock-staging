@@ -15,6 +15,7 @@ pub mod engine;
 pub mod gitsync;
 pub mod indexer;
 pub mod selection;
+pub mod safe_path;
 pub mod webdav;
 
 #[cfg(test)]
@@ -464,6 +465,8 @@ fn save_config(app: AppHandle, cfg: Config, state: State<'_, AppState>) -> Resul
         cfg.width = config::DEFAULT_WIDTH;
     }
     normalize_shortcut_config(&mut cfg);
+    // 安全校验必须先于快捷键注册、AppState 更新与任何落盘副作用。
+    cfg.validate()?;
     // 换绑快捷键；失败则保持旧配置与旧键并报错
     apply_shortcuts(&app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
@@ -576,14 +579,27 @@ fn apply_scope_template(name: String, app: AppHandle, state: State<'_, AppState>
     Ok(cfg)
 }
 
+/// Profile 名称与最终 JSON 路径都必须处于配置目录的 profiles 根内。
+fn config_profile_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    crate::safe_path::safe_source_component(name)?;
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?.join("profiles");
+    crate::safe_path::safe_join_under(&dir, &format!("{name}.json"))
+}
+
 /// 保存配置文件
 #[tauri::command]
 fn save_config_profile(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<(), String> {
     let cfg = state.cfg.lock().expect("cfg lock").clone();
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?.join("profiles");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    cfg.validate()?;
+    // 名称与路径先校验，避免非法 Profile 名产生目录或文件副作用。
+    let mut path = config_profile_path(&app, &name)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // 创建目录后复核边界，再写入真实内容。
+    path = config_profile_path(&app, &name)?;
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(format!("{name}.json")), json).map_err(|e| e.to_string())
+    std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
 /// 列出配置文件
@@ -596,10 +612,9 @@ fn list_config_profiles(app: AppHandle) -> Vec<String> {
 /// 加载配置文件
 #[tauri::command]
 fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<Config, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let path = dir.join("profiles").join(format!("{name}.json"));
+    let path = config_profile_path(&app, &name)?;
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut cfg: Config = serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))?;
+    let mut cfg = Config::from_json(&json)?;
     normalize_shortcut_config(&mut cfg);
     apply_shortcuts(&app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
@@ -1031,10 +1046,28 @@ fn collect_health_issues(cfg: &Config) -> Vec<HealthIssue> {
 fn health_check(app: AppHandle, state: State<'_, AppState>) -> Vec<HealthIssue> {
     let cfg = state.cfg.lock().expect("cfg lock").clone();
     let mut issues = collect_health_issues(&cfg);
+    if let Err(e) = cfg.validate() {
+        issues.push(HealthIssue {
+            kind: "invalid_source_name".into(),
+            severity: "error".into(),
+            message: format!("同步源名校验失败: {e}"),
+            fixable: false,
+        });
+    }
     // git 源检查需要真实 repos 路径，在此补齐
-    let repos = repos_dir(&app);
     for s in &cfg.git_sources {
-        let dir = repos.join(&s.name);
+        let dir = match repo_source_dir(&app, &s.name) {
+            Ok(dir) => dir,
+            Err(e) => {
+                issues.push(HealthIssue {
+                    kind: "invalid_source_name".into(),
+                    severity: "error".into(),
+                    message: format!("git 源名「{}」不安全: {e}", s.name),
+                    fixable: false,
+                });
+                continue;
+            }
+        };
         if !dir.join(".git").exists() {
             issues.push(HealthIssue {
                 kind: "git_source_broken".into(),
@@ -1054,9 +1087,19 @@ fn health_check(app: AppHandle, state: State<'_, AppState>) -> Vec<HealthIssue> 
         }
     }
     // WebDAV 源检查：镜像目录缺失
-    let dav_root = webdav_dir(&app);
     for s in &cfg.webdav_sources {
-        let dir = dav_root.join(&s.name);
+        let dir = match webdav_source_dir(&app, &s.name) {
+            Ok(dir) => dir,
+            Err(e) => {
+                issues.push(HealthIssue {
+                    kind: "invalid_source_name".into(),
+                    severity: "error".into(),
+                    message: format!("WebDAV 源名「{}」不安全: {e}", s.name),
+                    fixable: false,
+                });
+                continue;
+            }
+        };
         if !dir.is_dir() {
             issues.push(HealthIssue {
                 kind: "webdav_source_broken".into(),
@@ -1105,6 +1148,7 @@ fn health_check(app: AppHandle, state: State<'_, AppState>) -> Vec<HealthIssue> 
 #[tauri::command]
 fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<String>, Config), String> {
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    cfg.validate()?;
     let mut fixed: Vec<String> = Vec::new();
 
     // 1. 去重根（保留首条）
@@ -1175,9 +1219,18 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
     }
 
     // 4. git 源：克隆缺失→移除源（根若存在一并移除）；根缺失→补注册
-    let repos = repos_dir(&app);
+    let git_dirs: HashMap<String, PathBuf> = cfg
+        .git_sources
+        .iter()
+        .map(|s| Ok((s.name.clone(), repo_source_dir(&app, &s.name)?)))
+        .collect::<Result<_, String>>()?;
     let before = cfg.git_sources.len();
-    cfg.git_sources.retain(|s| repos.join(&s.name).join(".git").exists());
+    cfg.git_sources.retain(|s| {
+        git_dirs
+            .get(&s.name)
+            .map(|dir| dir.join(".git").exists())
+            .unwrap_or(false)
+    });
     if cfg.git_sources.len() < before {
         fixed.push(format!("移除克隆缺失的 git 源 {} 条", before - cfg.git_sources.len()));
     }
@@ -1199,7 +1252,11 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
     });
     let _ = before;
     for s in &cfg.git_sources {
-        let dir_str = repos.join(&s.name).to_string_lossy().to_string();
+        let dir_str = git_dirs
+            .get(&s.name)
+            .ok_or_else(|| format!("git 源目录校验失败: {}", s.name))?
+            .to_string_lossy()
+            .to_string();
         if !cfg.roots.iter().any(|r| r.path == dir_str) {
             cfg.roots.push(config::KnowledgeRoot {
                 path: dir_str,
@@ -1213,10 +1270,18 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
         }
     }
     // WebDAV 源：镜像缺失→移除源；根缺失→补注册；孤儿镜像根→移除
-    let dav_root = webdav_dir(&app);
+    let dav_dirs: HashMap<String, PathBuf> = cfg
+        .webdav_sources
+        .iter()
+        .map(|s| Ok((s.name.clone(), webdav_source_dir(&app, &s.name)?)))
+        .collect::<Result<_, String>>()?;
     let before = cfg.webdav_sources.len();
-    cfg.webdav_sources
-        .retain(|s| dav_root.join(&s.name).is_dir());
+    cfg.webdav_sources.retain(|s| {
+        dav_dirs
+            .get(&s.name)
+            .map(|dir| dir.is_dir())
+            .unwrap_or(false)
+    });
     if cfg.webdav_sources.len() < before {
         fixed.push(format!("移除镜像缺失的 WebDAV 源 {} 条", before - cfg.webdav_sources.len()));
     }
@@ -1235,7 +1300,11 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
         }
     });
     for s in &cfg.webdav_sources {
-        let dir_str = dav_root.join(&s.name).to_string_lossy().to_string();
+        let dir_str = dav_dirs
+            .get(&s.name)
+            .ok_or_else(|| format!("WebDAV 源目录校验失败: {}", s.name))?
+            .to_string_lossy()
+            .to_string();
         if !cfg.roots.iter().any(|r| r.path == dir_str) {
             cfg.roots.push(config::KnowledgeRoot {
                 path: dir_str,
@@ -1538,7 +1607,7 @@ fn pick_config_file(app: &AppHandle, state: &State<'_, AppState>) -> Result<Opti
 
 fn read_config_file(path: &str) -> Result<Config, String> {
     let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&json).map_err(|e| format!("配置格式错误: {e}"))
+    Config::from_json(&json)
 }
 
 /// 应用导入：解析 → 快捷键换绑 → 落盘 → 同步索引/监听 → WebDAV 重建镜像
@@ -1937,6 +2006,12 @@ fn repos_dir(app: &AppHandle) -> PathBuf {
         .join("repos")
 }
 
+/// 同步源目录的统一安全入口；非法名称在任何文件操作前返回错误。
+fn repo_source_dir(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    crate::safe_path::safe_source_component(name)?;
+    crate::safe_path::safe_join_under(&repos_dir(app), name)
+}
+
 /// 记录某 git 源的同步错误（保存配置供 UI 展示）
 fn git_record_error(app: &AppHandle, name: &str, err: &str) {
     let state: State<AppState> = app.state();
@@ -1950,18 +2025,18 @@ fn git_record_error(app: &AppHandle, name: &str, err: &str) {
 /// 对单个 git 源执行浅拉取并同步索引（手动与定时共用）
 /// 成功：更新 last_sync、清 last_error、保存配置、增量同步、emit index-updated
 fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
+    let state: State<AppState> = app.state();
+    // 先取同步锁再读配置，避免移除/同名新增后旧同步污染新目录。
+    let _guard = state.git_lock.lock().expect("git lock");
     let (branch, url, dir) = {
-        let state: State<AppState> = app.state();
         let cfg = state.cfg.lock().expect("cfg lock");
         let src = cfg
             .git_sources
             .iter()
             .find(|s| s.name == name)
             .ok_or_else(|| format!("仓库不存在: {name}"))?;
-        (src.branch.clone(), src.url.clone(), repos_dir(app).join(&src.name))
+        (src.branch.clone(), src.url.clone(), repo_source_dir(app, &src.name)?)
     };
-    let state: State<AppState> = app.state();
-    let _guard = state.git_lock.lock().expect("git lock");
     let msg = gitsync::pull_repo(&dir, &url, &branch)?;
     // 成功：更新时间戳并触发索引同步（在 git 锁外做引擎同步，避免长持锁）
     let stats = {
@@ -2028,15 +2103,20 @@ fn git_clone_blocking(
     let name = gitsync::sanitize_name(&name).ok_or("显示名只能包含字母/数字/-/_")?;
 
     let state: State<AppState> = app.state();
+    // 锁必须覆盖并发新增和最终配置提交，避免两个请求在克隆后才发现同名。
+    let _guard = state.git_lock.lock().expect("git lock");
     {
         let cfg = state.cfg.lock().expect("cfg lock");
-        if cfg.git_sources.iter().any(|s| s.name == name) {
-            return Err(format!("同名仓库已存在: {name}"));
-        }
+        crate::safe_path::validate_source_names(
+            cfg.git_sources
+                .iter()
+                .map(|source| source.name.as_str())
+                .chain(std::iter::once(name.as_str())),
+        )
+        .map_err(|e| format!("同名仓库已存在或名称无效: {name} ({e})"))?;
     }
 
-    let dir = repos_dir(app).join(&name);
-    let _guard = state.git_lock.lock().expect("git lock");
+    let dir = repo_source_dir(app, &name)?;
     gitsync::clone_repo(&url, &branch, &dir)?;
     // 分支留空时回填远端默认分支
     let branch = if branch.trim().is_empty() {
@@ -2044,10 +2124,10 @@ fn git_clone_blocking(
     } else {
         branch.trim().to_string()
     };
-    drop(_guard);
 
-    let stats = {
-        let mut cfg = state.cfg.lock().expect("cfg lock");
+    let (roots, scope) = {
+        // 先在候选副本上完成完整校验；失败时绝不修改 AppState 或写盘。
+        let mut cfg = state.cfg.lock().expect("cfg lock").clone();
         let dir_str = dir.to_string_lossy().to_string();
         cfg.git_sources.push(config::GitRepoSource {
             name: name.clone(),
@@ -2058,6 +2138,7 @@ fn git_clone_blocking(
             last_sync: Some(gitsync::now_secs()),
             last_error: None,
         });
+        cfg.validate()?;
         // 注册为知识根：.git 目录独立排除（扫描层另有 . 开头目录兜底）
         if !cfg.roots.iter().any(|r| r.path == dir_str) {
             cfg.roots.push(config::KnowledgeRoot {
@@ -2071,12 +2152,16 @@ fn git_clone_blocking(
         }
         let roots = cfg.root_specs();
         let scope = cfg.scope.clone();
+        *state.cfg.lock().expect("cfg lock") = cfg.clone();
         config::save(app, &cfg);
-        if roots.is_empty() {
-            None
-        } else {
-            state.engine.sync_roots(&roots, &scope).ok()
-        }
+        (roots, scope)
+    };
+    drop(_guard);
+
+    let stats = if roots.is_empty() {
+        None
+    } else {
+        state.engine.sync_roots(&roots, &scope).ok()
     };
     start_watchers(app);
     if let Some(st) = stats {
@@ -2117,6 +2202,10 @@ async fn git_remove(app: AppHandle, name: String) -> Result<Config, String> {
 
 fn git_remove_blocking(app: &AppHandle, name: String) -> Result<Config, String> {
     let state: State<AppState> = app.state();
+    // 移除全程持同步锁，防止同名 add 在配置移除后重建目录又被本次删除。
+    let _guard = state.git_lock.lock().expect("git lock");
+    // 名称与目录边界必须先于配置变更和删除操作。
+    let dir = repo_source_dir(app, &name)?;
     {
         let mut cfg = state.cfg.lock().expect("cfg lock");
         let before = cfg.git_sources.len();
@@ -2124,7 +2213,6 @@ fn git_remove_blocking(app: &AppHandle, name: String) -> Result<Config, String> 
         if cfg.git_sources.len() == before {
             return Err(format!("仓库不存在: {name}"));
         }
-        let dir = repos_dir(app).join(&name);
         cfg.roots
             .retain(|r| r.path != dir.to_string_lossy().to_string());
         let roots = cfg.root_specs();
@@ -2151,23 +2239,38 @@ fn webdav_dir(app: &AppHandle) -> PathBuf {
         .join("webdav")
 }
 
-/// WebDAV 源镜像元数据文件
-fn webdav_meta(app: &AppHandle, name: &str) -> PathBuf {
-    webdav_dir(app).join(format!("{name}.meta.json"))
+/// WebDAV 源镜像目录的统一安全入口。
+fn webdav_source_dir(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    crate::safe_path::safe_source_component(name)?;
+    crate::safe_path::safe_join_under(&webdav_dir(app), name)
 }
 
-fn load_mirror(app: &AppHandle, name: &str) -> webdav::MirrorState {
-    std::fs::read_to_string(webdav_meta(app, name))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+/// WebDAV 源镜像元数据文件；名称与最终路径都必须处于镜像根内。
+fn webdav_meta(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    crate::safe_path::safe_source_component(name)?;
+    crate::safe_path::safe_join_under(&webdav_dir(app), &format!("{name}.meta.json"))
 }
 
-fn save_mirror(app: &AppHandle, name: &str, state_map: &webdav::MirrorState) {
-    let _ = std::fs::create_dir_all(webdav_dir(app));
-    if let Ok(json) = serde_json::to_string_pretty(state_map) {
-        let _ = std::fs::write(webdav_meta(app, name), json);
+fn load_mirror(app: &AppHandle, name: &str) -> Result<webdav::MirrorState, String> {
+    let path = webdav_meta(app, name)?;
+    let json = match std::fs::read_to_string(path) {
+        Ok(json) => json,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(webdav::MirrorState::new()),
+        Err(e) => return Err(format!("读取 WebDAV 镜像元数据失败: {e}")),
+    };
+    serde_json::from_str(&json)
+        .map_err(|e| format!("解析 WebDAV 镜像元数据失败: {e}"))
+}
+
+fn save_mirror(app: &AppHandle, name: &str, state_map: &webdav::MirrorState) -> Result<(), String> {
+    let mut path = webdav_meta(app, name)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建 WebDAV 元数据目录失败: {e}"))?;
     }
+    // 创建目录后再次校验，避免目录准备期间被替换为 junction。
+    path = webdav_meta(app, name)?;
+    let json = serde_json::to_string_pretty(state_map).map_err(|e| format!("序列化 WebDAV 镜像元数据失败: {e}"))?;
+    std::fs::write(path, json).map_err(|e| format!("写入 WebDAV 镜像元数据失败: {e}"))
 }
 
 /// 读取源的明文凭据（兼容旧明文与新 DPAPI 密文）
@@ -2200,8 +2303,10 @@ fn dav_log(msg: &str) {
 
 /// 对单个 WebDAV 源执行镜像同步（手动与定时共用）
 fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
+    let state: State<AppState> = app.state();
+    // 先取同步锁再读配置，避免移除/同名新增后旧同步覆盖新镜像。
+    let _guard = state.webdav_lock.lock().expect("webdav lock");
     let (url, username, password) = {
-        let state: State<AppState> = app.state();
         let cfg = state.cfg.lock().expect("cfg lock");
         let src = cfg
             .webdav_sources
@@ -2211,28 +2316,30 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
         let (u, p) = webdav_credentials(src)?;
         (src.url.clone(), u, p)
     };
-    let state: State<AppState> = app.state();
-    let _guard = state.webdav_lock.lock().expect("webdav lock");
 
     let remote = webdav::list_remote(&url, &username, &password)?;
-    let local_root = webdav_dir(app).join(name);
+    let local_root = webdav_source_dir(app, name)?;
     std::fs::create_dir_all(&local_root).map_err(|e| e.to_string())?;
-    let mut mirror = load_mirror(app, name);
+    let local_root = webdav_source_dir(app, name)?;
+    let mut mirror = load_mirror(app, name)?;
     let max_kb = {
         let cfg = state.cfg.lock().expect("cfg lock");
         cfg.scope.max_file_kb
     };
-    let (to_download, to_delete) = webdav::diff_mirror(&remote, &mirror, &local_root, max_kb);
+    let (to_download, to_delete) = webdav::diff_mirror(&remote, &mirror, &local_root, max_kb)?;
 
     let mut downloaded = 0usize;
     let mut deleted = 0usize;
     let total = to_download.len();
-    for (rf, local) in &to_download {
+    for (rf, _planned) in &to_download {
+        // diff 后、实际写入前重新收敛，并在创建目录后再次复核。
+        let local = webdav::local_path(&local_root, &rf.rel)?;
         if let Some(parent) = local.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建镜像目录失败: {e}"))?;
         }
-        let file_url = format!("{}/{}", url.trim_end_matches('/'), rf.rel);
-        webdav::download(&file_url, &username, &password, local)?;
+        let local = webdav::local_path(&local_root, &rf.rel)?;
+        let file_url = webdav::remote_file_url(&url, &rf.rel)?;
+        webdav::download(&file_url, &username, &password, &local)?;
         downloaded += 1;
         // 同步进度实时反馈
         let _ = app.emit(
@@ -2241,7 +2348,8 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
         );
     }
     for rel in &to_delete {
-        let local = local_root.join(rel.replace('/', "\\"));
+        // 删除前再次收敛，避免 diff 之后文件系统状态发生变化。
+        let local = webdav::local_path(&local_root, rel)?;
         if local.is_file() {
             let _ = std::fs::remove_file(&local);
             deleted += 1;
@@ -2252,7 +2360,7 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
         .iter()
         .map(|r| (r.rel.clone(), r.clone()))
         .collect();
-    save_mirror(app, name, &mirror);
+    save_mirror(app, name, &mirror)?;
 
     // 触发索引增量同步（镜像目录已是知识根）
     let stats = {
@@ -2371,14 +2479,19 @@ fn webdav_add_blocking(
     let name = gitsync::sanitize_name(&name).ok_or("显示名只能包含字母/数字/-/_")?;
 
     let state: State<AppState> = app.state();
+    // 锁覆盖并发新增和最终配置提交，并在网络/目录副作用前校验完整名称集合。
+    let _guard = state.webdav_lock.lock().expect("webdav lock");
     {
         let cfg = state.cfg.lock().expect("cfg lock");
-        if cfg.webdav_sources.iter().any(|s| s.name == name) {
-            return Err(format!("同名源已存在: {name}"));
-        }
+        crate::safe_path::validate_source_names(
+            cfg.webdav_sources
+                .iter()
+                .map(|source| source.name.as_str())
+                .chain(std::iter::once(name.as_str())),
+        )
+        .map_err(|e| format!("同名源已存在或名称无效: {name} ({e})"))?;
     }
 
-    let _guard = state.webdav_lock.lock().expect("webdav lock");
     webdav::test_connection(&url, &username, &password)?;
     dav_log("test_connection ok");
 
@@ -2388,60 +2501,70 @@ fn webdav_add_blocking(
         format!("枚举远端失败: {e}")
     })?;
     dav_log(&format!("list_remote ok files={}", remote.len()));
-    let local_root = webdav_dir(app).join(&name);
+    webdav_source_dir(app, &name)?;
+    std::fs::create_dir_all(&webdav_dir(app))
+        .map_err(|e| format!("创建镜像根目录失败: {e}"))?;
+    let local_root = webdav_source_dir(app, &name)?;
     std::fs::create_dir_all(&local_root).map_err(|e| format!("创建镜像目录失败: {e}"))?;
+    let local_root = webdav_source_dir(app, &name)?;
     let max_kb = {
         let cfg = state.cfg.lock().expect("cfg lock");
         cfg.scope.max_file_kb
     };
-    let (to_download, _to_delete) = webdav::diff_mirror(&remote, &Default::default(), &local_root, max_kb);
-    for (rf, local) in &to_download {
+    let (to_download, _to_delete) = webdav::diff_mirror(&remote, &Default::default(), &local_root, max_kb)?;
+    for (rf, _planned) in &to_download {
+        // 首次同步也必须遵守与实际同步相同的写入前边界复核。
+        let local = webdav::local_path(&local_root, &rf.rel)?;
         if let Some(parent) = local.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建镜像目录失败: {e}"))?;
         }
-        let file_url = format!("{}/{}", url.trim_end_matches('/'), rf.rel);
-        webdav::download(&file_url, &username, &password, local)
+        let local = webdav::local_path(&local_root, &rf.rel)?;
+        let file_url = webdav::remote_file_url(&url, &rf.rel)?;
+        webdav::download(&file_url, &username, &password, &local)
             .map_err(|e| format!("下载 {} 失败: {e}", rf.rel))?;
     }
     let mirror: webdav::MirrorState = remote.iter().map(|r| (r.rel.clone(), r.clone())).collect();
-    save_mirror(app, &name, &mirror);
+    save_mirror(app, &name, &mirror)?;
 
-    // 同步成功：写入配置 + 注册知识根（密码 DPAPI 加密后落盘）
+    // 同步成功：先在候选副本上校验完整配置，再写入配置 + 注册知识根
+    //（密码 DPAPI 加密后落盘）。
     let stored_password = webdav::dpapi_encrypt(&password)
         .map_err(|e| format!("凭据加密失败: {e}"))?;
-    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
-    cfg.webdav_sources.push(config::WebdavSource {
-        name: name.clone(),
-        url: url.clone(),
-        username: username.trim().to_string(),
-        password: stored_password,
-        enabled: true,
-        interval_min,
-        last_sync: Some(gitsync::now_secs()),
-        last_error: None,
-    });
-    let dir_str = local_root.to_string_lossy().to_string();
-    if !cfg.roots.iter().any(|r| r.path == dir_str) {
-        cfg.roots.push(config::KnowledgeRoot {
-            path: dir_str,
-            label: name.clone(),
+    let (roots, scope) = {
+        let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+        cfg.webdav_sources.push(config::WebdavSource {
+            name: name.clone(),
+            url: url.clone(),
+            username: username.trim().to_string(),
+            password: stored_password,
             enabled: true,
-            root_exclude_globs: Vec::new(),
-            root_exts: Vec::new(),
-            root_max_file_kb: 0,
+            interval_min,
+            last_sync: Some(gitsync::now_secs()),
+            last_error: None,
         });
-    }
-    *state.cfg.lock().expect("cfg lock") = cfg.clone();
-    config::save(app, &cfg);
+        cfg.validate()?;
+        let dir_str = local_root.to_string_lossy().to_string();
+        if !cfg.roots.iter().any(|r| r.path == dir_str) {
+            cfg.roots.push(config::KnowledgeRoot {
+                path: dir_str,
+                label: name.clone(),
+                enabled: true,
+                root_exclude_globs: Vec::new(),
+                root_exts: Vec::new(),
+                root_max_file_kb: 0,
+            });
+        }
+        let roots = cfg.root_specs();
+        let scope = cfg.scope.clone();
+        *state.cfg.lock().expect("cfg lock") = cfg.clone();
+        config::save(app, &cfg);
+        (roots, scope)
+    };
     drop(_guard);
 
     // 索引增量同步
-    {
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
-        if !roots.is_empty() {
-            let _ = state.engine.sync_roots(&roots, &scope);
-        }
+    if !roots.is_empty() {
+        let _ = state.engine.sync_roots(&roots, &scope);
     }
     start_watchers(app);
     let cfg_out = state.cfg.lock().expect("cfg lock").clone();
@@ -2474,6 +2597,11 @@ async fn webdav_pull(app: AppHandle, name: String) -> Result<Config, String> {
 async fn webdav_remove(app: AppHandle, name: String) -> Result<Config, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: State<AppState> = app.state();
+        // 移除全程持同步锁，防止同名 add 在配置移除后重建目录又被本次删除。
+        let _guard = state.webdav_lock.lock().expect("webdav lock");
+        // 名称、镜像目录与元数据路径必须先于配置变更和删除操作。
+        let dir = webdav_source_dir(&app, &name)?;
+        webdav_meta(&app, &name)?;
         {
             let mut cfg = state.cfg.lock().expect("cfg lock");
             let before = cfg.webdav_sources.len();
@@ -2481,20 +2609,21 @@ async fn webdav_remove(app: AppHandle, name: String) -> Result<Config, String> {
             if cfg.webdav_sources.len() == before {
                 return Err(format!("源不存在: {name}"));
             }
-            let dir = webdav_dir(&app).join(&name);
             cfg.roots
                 .retain(|r| r.path != dir.to_string_lossy().to_string());
             let roots = cfg.root_specs();
             let scope = cfg.scope.clone();
             config::save(&app, &cfg);
-            *state.cfg.lock().expect("cfg lock") = cfg.clone();
             if !roots.is_empty() {
                 let _ = state.engine.sync_roots(&roots, &scope);
             }
         }
         start_watchers(&app);
-        let _ = std::fs::remove_dir_all(webdav_dir(&app).join(&name));
-        let _ = std::fs::remove_file(webdav_meta(&app, &name));
+        // 配置保存与监听切换后再次校验，删除只允许落在本次源自己的边界内。
+        let dir = webdav_source_dir(&app, &name)?;
+        let meta = webdav_meta(&app, &name)?;
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_file(meta);
         let cfg_out = state.cfg.lock().expect("cfg lock").clone();
         Ok(cfg_out)
     })

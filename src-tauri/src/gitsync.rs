@@ -6,7 +6,8 @@
 //! 安全：GIT_TERMINAL_PROMPT=0 禁终端提示挂起（GUI 凭证助手仍可用）；
 //!       http.lowSpeedLimit 兜底断流；仓库名 sanitize 防路径穿越。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 当前 unix 秒
@@ -107,12 +108,58 @@ pub fn clone_repo(url: &str, branch: &str, dir: &Path) -> Result<(), String> {
 
 /// 读取当前分支名（克隆后回填用）
 pub fn current_branch(dir: &Path) -> Result<String, String> {
-    run(Some(dir), &["rev-parse", "--abbrev-ref", "HEAD"])
+    run(Some(&dir), &["rev-parse", "--abbrev-ref", "HEAD"])
+}
+
+static REBRANCH_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// 生成与合法同步源名空间不冲突的临时目录名。名称中的 `..` 不会被
+/// safe_source_component 接受，因此不可能与用户来源同名；仅用于 Windows 合法文件名。
+fn rebranch_temp_path(dir: &Path) -> Result<PathBuf, String> {
+    let parent = dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("仓库目录缺少父目录: {}", dir.display()))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    for _ in 0..128 {
+        let serial = REBRANCH_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".kd..rebranch-{}-{nanos}-{serial}", std::process::id());
+        let candidate = crate::safe_path::safe_join_under(parent, &name)?;
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => {
+                return Err(format!("检查分支临时目录失败 {}: {error}", candidate.display()))
+            }
+        }
+    }
+    Err("无法分配唯一的分支临时目录".into())
+}
+
+fn cleanup_rebranch_temp(path: &Path) {
+    let Some(parent) = path.parent() else { return };
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return };
+    if let Ok(safe_path) = crate::safe_path::safe_join_under(parent, name) {
+        let _ = std::fs::remove_dir_all(safe_path);
+    }
 }
 
 /// 浅更新到远端最新（fetch --depth 1 + reset --hard + clean -fd）
 /// 分支失配（单分支浅克隆无法直接 checkout 远端其它分支）→ 先克隆新分支到临时目录，成功后才替换旧克隆
 pub fn pull_repo(dir: &Path, url: &str, branch: &str) -> Result<String, String> {
+    let parent = dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("仓库目录缺少父目录: {}", dir.display()))?;
+    let source_name = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("仓库目录名无效: {}", dir.display()))?;
+    crate::safe_path::safe_source_component(source_name)?;
+    let dir = crate::safe_path::safe_join_under(parent, source_name)?;
     if !dir.join(".git").exists() {
         return Err(format!("目录不是 git 仓库: {}", dir.display()));
     }
@@ -120,29 +167,61 @@ pub fn pull_repo(dir: &Path, url: &str, branch: &str) -> Result<String, String> 
     if branch.is_empty() {
         return Err("分支名为空".into());
     }
-    let cur = current_branch(dir).unwrap_or_default();
+    let cur = current_branch(&dir).unwrap_or_default();
     if cur != branch {
-        let tmp = dir.with_extension("rebranch-tmp");
-        let _ = std::fs::remove_dir_all(&tmp);
-        clone_repo(url, branch, &tmp).map_err(|e| format!("克隆分支 {branch} 失败: {e}"))?;
-        std::fs::remove_dir_all(dir).map_err(|e| format!("删除旧克隆失败: {e}"))?;
-        std::fs::rename(&tmp, &dir).map_err(|e| format!("替换克隆目录失败: {e}"))?;
-        let short = run(Some(dir), &["rev-parse", "--short", "HEAD"])?;
+        let tmp = rebranch_temp_path(&dir)?;
+        if let Err(error) = clone_repo(url, branch, &tmp) {
+            cleanup_rebranch_temp(&tmp);
+            return Err(format!("克隆分支 {branch} 失败: {error}"));
+        }
+        // 网络克隆期间目录可能被替换； destructive 操作前再次检查根/祖先与目标。
+        let tmp_name = tmp
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "分支临时目录名无效".to_string())?;
+        let tmp = match crate::safe_path::safe_join_under(parent, tmp_name) {
+            Ok(safe_tmp) => safe_tmp,
+            Err(error) => {
+                cleanup_rebranch_temp(&tmp);
+                return Err(error);
+            }
+        };
+        let dir = match crate::safe_path::safe_join_under(parent, source_name) {
+            Ok(safe_dir) => safe_dir,
+            Err(error) => {
+                cleanup_rebranch_temp(&tmp);
+                return Err(error);
+            }
+        };
+        if let Err(error) = std::fs::remove_dir_all(&dir) {
+            cleanup_rebranch_temp(&tmp);
+            return Err(format!("删除旧克隆失败: {error}"));
+        }
+        let tmp = crate::safe_path::safe_join_under(parent, tmp_name)?;
+        if let Err(error) = std::fs::rename(&tmp, &dir) {
+            // 旧目录已删除，tmp 是唯一的新克隆；失败时必须保留并报告路径，
+            // 不能再执行清理而把用户数据一并删除。
+            return Err(format!(
+                "替换克隆目录失败: {error}；新克隆保留在 {}",
+                tmp.display()
+            ));
+        }
+        let short = run(Some(&dir), &["rev-parse", "--short", "HEAD"])?;
         return Ok(format!("已切换分支 {branch}@{short}（重建克隆）"));
     }
-    run(Some(dir), &["fetch", "--depth", "1", "origin", branch])?;
-    run(Some(dir), &["reset", "--hard", "FETCH_HEAD"])?;
-    run(Some(dir), &["clean", "-fd"])?;
-    let short = run(Some(dir), &["rev-parse", "--short", "HEAD"])?;
+    run(Some(&dir), &["fetch", "--depth", "1", "origin", branch])?;
+    // fetch 结束后、reset/clean 等破坏性命令前复核目录边界。
+    let dir = crate::safe_path::safe_join_under(parent, source_name)?;
+    run(Some(&dir), &["reset", "--hard", "FETCH_HEAD"])?;
+    run(Some(&dir), &["clean", "-fd"])?;
+    let short = run(Some(&dir), &["rev-parse", "--short", "HEAD"])?;
     Ok(format!("已同步 {branch}@{short}"))
 }
 
-/// 删除克隆目录（name 必须已过 sanitize；双保险校验路径未逃逸根目录）
+/// 删除克隆目录：名称与最终路径都必须处于 repos 根内。
 pub fn remove_repo_dir(repos_root: &Path, name: &str) -> Result<(), String> {
-    let dir = repos_root.join(name);
-    if !dir.starts_with(repos_root) {
-        return Err("非法仓库名".into());
-    }
+    crate::safe_path::safe_source_component(name)?;
+    let dir = crate::safe_path::safe_join_under(repos_root, name)?;
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("删除目录失败: {e}"))?;
     }
@@ -165,5 +244,53 @@ mod tests {
     fn name_from_url_works() {
         assert_eq!(name_from_url("https://github.com/u/proj.git"), "proj");
         assert_eq!(name_from_url("https://gitlab.com/u/proj/"), "proj");
+    }
+
+    #[test]
+    fn path_security_rebranch_temp_avoids_source_namespace() {
+        let base = std::env::temp_dir().join(format!(
+            "kd-git-rebranch-path-security-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("repos");
+        let existing = root.join("x.rebranch-tmp");
+        std::fs::create_dir_all(&existing).unwrap();
+        std::fs::write(existing.join("sentinel.txt"), "keep").unwrap();
+
+        let first = rebranch_temp_path(&root.join("x")).unwrap();
+        let second = rebranch_temp_path(&root.join("x")).unwrap();
+        assert_ne!(first, second);
+        assert_ne!(first, existing);
+        assert_ne!(second, existing);
+        let temp_name = first.file_name().unwrap().to_str().unwrap();
+        assert!(crate::safe_path::safe_source_component(temp_name).is_err());
+        assert_eq!(
+            std::fs::read_to_string(existing.join("sentinel.txt")).unwrap(),
+            "keep"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn path_security_remove_repo_rejects_escape() {
+        let base = std::env::temp_dir().join(format!(
+            "kd-git-path-security-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("repos");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("sentinel.txt"), "keep").unwrap();
+
+        assert!(remove_repo_dir(&root, "../outside").is_err());
+        assert!(remove_repo_dir(&root, "..\\outside").is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("sentinel.txt")).unwrap(),
+            "keep"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -105,6 +105,7 @@ uTools 风格的本地知识库/应用/工具一体化检索悬浮窗：一条**
 - **本地目录**：设置 → 范围 → 选择并添加目录
 - **Git 仓库**：设置 → 同步 → 粘贴 URL（私有库可在 URL 内带 token）→ 克隆并添加；分支列可编辑，改动后点"更新"自动重建克隆切换分支
 - **WebDAV**：设置 → 同步 → 集合 URL + 账号密码 → 添加并同步（只读镜像）
+- **同步源安全**：Git/WebDAV 源名必须是单个安全路径组件；配置加载、保存与导入都会重新校验。WebDAV 条目必须位于集合路径内，拒绝 `..`、反斜杠、盘符、绝对路径及逃逸 junction；URL 路径保持大小写语义，Windows 镜像中的大小写别名按同一文件处理，非法条目不下载、不删除。
 - **CTF 知识库示例**：可直接接入 [Dest1ny-Sec/Des-CTF-Knowledge](https://github.com/Dest1ny-Sec/Des-CTF-Knowledge)（1100+ 篇 CTF 攻击手册，接入即得 8 万+ 知识块检索）
 
 ### 运行日志排查
@@ -163,8 +164,8 @@ for item in ask("SSTI 模板注入 检测 payload"):
 |---|---|---|
 | `roots[]` | — | 知识库根：`path` / `label` / `enabled` / `root_exclude_globs`（每库独立排除，如 `*.idx.md`）/ `root_exts` / `root_max_file_kb` |
 | `scope` | — | 全局范围：`exclude_globs` / `include_globs`（白名单）/ `include_exts` / `max_file_kb` / `max_age_days` |
-| `git_sources[]` | — | Git 源：`name` / `url` / `branch` / `enabled` / `interval_min`（0=仅手动）/ `last_sync` / `last_error` |
-| `webdav_sources[]` | — | WebDAV 源（凭据 DPAPI 加密） |
+| `git_sources[]` | — | Git 源：`name` / `url` / `branch` / `enabled` / `interval_min`（0=仅手动）/ `last_sync` / `last_error`；`name` 必须是安全单路径组件 |
+| `webdav_sources[]` | — | WebDAV 源（凭据 DPAPI 加密）；`name` 必须是安全单路径组件，同名大小写变体不可重复 |
 | `presets[]` | — | 范围预设（一键切换知识库组合） |
 | `ai` | 关闭 | `{enabled, base_url, api_key(dpapi:密文), model, timeout_ms, top_n}` |
 | `api` | 启用 | `{enabled, port(18230), token}`；改动需重启 |
@@ -199,6 +200,7 @@ ui/                     零打包器前端（vanilla JS + 内联 SVG）
 src-tauri/src/
   lib.rs                窗口形态/快捷键/托盘/IPC/文件监听/位置记忆
   selection.rs          UI Automation 只读划词 + 受控 Ctrl+C 回退
+  safe_path.rs          同步源名/远端相对路径/镜像目录边界校验
   engine.rs             Tantivy BM25 + jieba + 持久化索引 + 同义词改写
   indexer.rs            差异化切块（法规/手册/问答/笔记 → DocumentChunk）
   matching.rs           范围规则匹配（glob 纯函数）

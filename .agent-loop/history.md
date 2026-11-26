@@ -70,3 +70,12 @@
 - **单测状态**: 补齐 MSYS2/Rust GNU 工具路径后，定向 `cargo test --locked --lib selection::tests -- --nocapture` 完成编译，但测试 exe 仍在启动阶段退出 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未进入断言，因此不计为单测通过。
 - **清理**: 最终 portable 进程数 0，18230 LISTEN 数 0；用户配置保持划词与回退默认关闭，搜索历史保持 6 条。
 - **下一步行动**: 产品层收官完成；无未解决的产品缺陷。Rust 单测启动环境问题仍作为已知阻塞保留，不计入本次成功项。
+
+### Iteration #4 - 2026-11-26T16:44:03Z
+
+- **Commit**: 待提交（基线 `101202a`，v0.8.43）。
+- **改动要点**: 新增统一 `safe_path` 边界校验；WebDAV 集合路径按完整段判断，origin 在解码前校验原始路径边界，下载/子目录请求逐段重编码，拒绝穿越、反斜杠、盘符、绝对路径、大小写别名及保留设备名（含 COM¹/²/³），下载与删除共用安全拼接；Git/WebDAV 来源名覆盖配置加载、保存、Profile、导入、健康检查、同步与删除；非法旧镜像元数据只告警跳过；Git 切分支使用来源命名空间外的唯一临时目录并在网络操作后复核边界；新增/同步/移除统一先锁后读配置；新增 `path_security` 定向测试并加入两个 Windows CI 工作流。
+- **独立复核**: 多轮只读审查修复 origin 编码边界、add 候选配置原子性、WebDAV path 大小写、Git 临时目录碰撞、rename 失败保留、URL 二次解码、reparse 复核与同名 add/remove/sync 竞态后，最终复核 `PASS`。
+- **本地门禁**: `node --check ui/app.js`、`VERSION_OK 0.8.43 (6 locations)`、npm 锁文件校验、三种划词前端回归、`cargo check --tests --locked` 与 `loop_driver.sh precheck` 均通过；仅保留两个存量 warning。
+- **定向测试**: `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib path_security -- --nocapture` 编译成功，但测试 exe 仍在启动阶段退出 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未进入断言，因此不计为本地测试通过。
+- **下一步行动**: 完成独立审查后提交，仅推 staging；以 Windows CI 的定向测试执行结果、产物审计和隔离 mock WebDAV 实机回归作为本轮闭环证据。
