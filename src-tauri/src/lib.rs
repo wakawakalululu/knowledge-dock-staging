@@ -30,6 +30,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, SystemTime};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -44,8 +45,14 @@ struct AppState {
     cfg: Mutex<Config>,
     /// 原生目录选择对话框打开期间禁止失焦隐藏
     dialog_open: AtomicBool,
-    /// 文件监听句柄：替换即关闭旧通道，旧监听线程随之退出
-    watcher: Mutex<Option<RecommendedWatcher>>,
+    /// 文件监听句柄与泵线程：替换或零根时释放句柄并等待旧线程退出
+    watcher: Mutex<Option<WatcherSession>>,
+    /// 串行化索引同步与监听会话替换，零根必须先停旧监听再清索引
+    sync_lock: Mutex<()>,
+    /// 监听回调与 reconcile 竞争时保留事件，当前扫描结束后必须补扫
+    watcher_resync: AtomicBool,
+    /// 配置读取失败时默认空 roots 不是权威零根状态，禁止据此清索引
+    config_loaded: AtomicBool,
     /// git 操作互斥（克隆/拉取串行，防定时与手动并发冲突）
     git_lock: Mutex<()>,
     /// WebDAV 同步互斥
@@ -131,15 +138,38 @@ fn set_autostart(enable: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn sync_roots_snapshot(app: &AppHandle) -> Result<Stats, String> {
+    let state: State<AppState> = app.state();
+    let (roots, scope) = {
+        let cfg = state.cfg.lock().expect("cfg lock");
+        (cfg.root_specs(), cfg.scope.clone())
+    };
+    state.engine.sync_roots(&roots, &scope)
+}
+
+fn sync_until_quiet<F>(pending: &AtomicBool, mut sync: F) -> Result<Stats, String>
+where
+    F: FnMut() -> Result<Stats, String>,
+{
+    loop {
+        let stats = sync()?;
+        if !pending.swap(false, Ordering::SeqCst) {
+            return Ok(stats);
+        }
+    }
+}
+
+/// watcher 回调只同步索引，不能替换自身所在的泵线程。
 fn sync_and_emit(app: &AppHandle) {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").root_specs();
-    let scope = state.cfg.lock().expect("cfg lock").scope.clone();
-    if roots.is_empty() {
+    let Ok(_sync_guard) = state.sync_lock.try_lock() else {
+        state.watcher_resync.store(true, Ordering::SeqCst);
         return;
-    }
-    kdlog!(info, "engine", "重新扫描开始（{} 根）", roots.len());
-    match state.engine.sync_roots(&roots, &scope) {
+    };
+    state.watcher_resync.store(false, Ordering::SeqCst);
+    let roots = state.cfg.lock().expect("cfg lock").root_specs().len();
+    kdlog!(info, "engine", "重新扫描开始（{} 根）", roots);
+    match sync_until_quiet(&state.watcher_resync, || sync_roots_snapshot(app)) {
         Ok(stats) => {
             kdlog!(info, "engine", "同步完成 docs={} blocks={} updated={} removed={} {}ms", stats.docs, stats.chunks, stats.updated, stats.removed, stats.duration_ms);
             let _ = app.emit("index-updated", &stats);
@@ -150,22 +180,116 @@ fn sync_and_emit(app: &AppHandle) {
     }
 }
 
-/// 启动/替换文件监听：一个 watcher 监听全部知识库根；
-/// 旧 watcher 被替换后通道关闭，旧监听线程自动退出（防线程累积）
-fn start_watchers(app: &AppHandle) {
+/// 根配置变更统一走此入口：先停旧监听，非空根先建新监听再扫描，零根直接清空。
+fn sync_and_reconcile(app: &AppHandle) -> Result<Stats, String> {
     let state: State<AppState> = app.state();
-    let roots = state.cfg.lock().expect("cfg lock").root_specs();
+    loop {
+        let stats = {
+            let _sync_guard = state.sync_lock.lock().expect("sync lock");
+            let (roots, scope) = {
+                let cfg = state.cfg.lock().expect("cfg lock");
+                (cfg.root_specs(), cfg.scope.clone())
+            };
+            if roots.is_empty() && !state.config_loaded.load(Ordering::SeqCst) {
+                return Err("配置未成功加载，拒绝按零根清空索引".into());
+            }
+            if !roots.is_empty() {
+                state.config_loaded.store(true, Ordering::SeqCst);
+            }
+            stop_watchers(app);
+            state.watcher_resync.store(false, Ordering::SeqCst);
+            if !roots.is_empty() {
+                start_watchers(app, &roots);
+            }
+            sync_until_quiet(&state.watcher_resync, || {
+                state.engine.sync_roots(&roots, &scope)
+            })?
+        };
+        if !state.watcher_resync.swap(false, Ordering::SeqCst) {
+            return Ok(stats);
+        }
+    }
+}
+
+fn sync_and_reconcile_emit(app: &AppHandle) {
+    match sync_and_reconcile(app) {
+        Ok(stats) => {
+            kdlog!(info, "engine", "同步完成 docs={} blocks={} updated={} removed={} {}ms", stats.docs, stats.chunks, stats.updated, stats.removed, stats.duration_ms);
+            let _ = app.emit("index-updated", &stats);
+        }
+        Err(e) => {
+            let _ = app.emit("index-error", e);
+        }
+    }
+}
+
+struct WatcherSession {
+    watcher: RecommendedWatcher,
+    pump: std::thread::JoinHandle<()>,
+}
+
+impl WatcherSession {
+    fn stop(self) -> bool {
+        drop(self.watcher);
+        self.pump.join().is_ok()
+    }
+}
+
+fn stop_watchers(app: &AppHandle) {
+    let previous = app.state::<AppState>().watcher.lock().expect("watcher lock").take();
+    if let Some(previous) = previous {
+        if !previous.stop() {
+            kdlog!(warn, "watcher", "旧监听泵线程异常退出");
+        }
+    }
+}
+
+fn spawn_watcher_pump<F>(
+    rx: std::sync::mpsc::Receiver<Result<notify::Event, notify::Error>>,
+    mut on_debounce: F,
+) -> std::thread::JoinHandle<()>
+where
+    F: FnMut() + Send + 'static,
+{
+    std::thread::spawn(move || {
+        loop {
+            match rx.recv() {
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => continue,
+                Err(_) => return,
+            }
+            loop {
+                match rx.recv_timeout(Duration::from_millis(900)) {
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(_)) => continue,
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            }
+            on_debounce();
+        }
+    })
+}
+
+/// 启动/替换文件监听：一个 watcher 监听全部知识库根；零根释放旧句柄并等待泵线程退出。
+fn start_watchers(app: &AppHandle, roots: &[crate::scope::RootSpec]) {
+    let state: State<AppState> = app.state();
     if roots.is_empty() {
+        stop_watchers(app);
         return;
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher = match notify::recommended_watcher(tx) {
         Ok(w) => w,
-        Err(_) => return,
+        Err(e) => {
+            kdlog!(warn, "watcher", "创建文件监听失败: {e}");
+            stop_watchers(app);
+            return;
+        }
     };
     // 单根失败容错：某根不可监听只跳过该根，不能放弃其余根
     let mut watched_any = false;
-    for spec in &roots {
+    for spec in roots {
         if watcher.watch(&spec.path, RecursiveMode::Recursive).is_ok() {
             watched_any = true;
         } else {
@@ -173,28 +297,22 @@ fn start_watchers(app: &AppHandle) {
         }
     }
     if !watched_any {
+        drop(watcher);
+        stop_watchers(app);
         return;
     }
 
-    // 泵线程：静默 900ms 后触发多根增量同步
     let handle = app.clone();
-    std::thread::spawn(move || {
-        loop {
-            // 通道关闭（watcher 被替换）则退出线程
-            if rx.recv().is_err() {
-                return;
-            }
-            loop {
-                match rx.recv_timeout(Duration::from_millis(900)) {
-                    Ok(_) => continue,
-                    Err(_) => break,
-                }
-            }
-            sync_and_emit(&handle);
+    let session = WatcherSession {
+        watcher,
+        pump: spawn_watcher_pump(rx, move || sync_and_emit(&handle)),
+    };
+    let previous = state.watcher.lock().expect("watcher lock").replace(session);
+    if let Some(previous) = previous {
+        if !previous.stop() {
+            kdlog!(warn, "watcher", "旧监听泵线程异常退出");
         }
-    });
-
-    *state.watcher.lock().expect("watcher lock") = Some(watcher);
+    }
 }
 
 /// 显示窗口当前的前端形态并聚焦；窗口高度统一由前端 `update_view()` 驱动。
@@ -453,6 +571,20 @@ fn clamp_into_monitor(app: &AppHandle) {
 
 // ---------------- Tauri 命令 ----------------
 
+fn save_locked_runtime_config(app: &AppHandle, cfg: &mut Config) {
+    if app.state::<AppState>().config_loaded.load(Ordering::SeqCst) {
+        config::save(app, cfg);
+    }
+}
+
+fn require_config_loaded(state: &State<'_, AppState>) -> Result<(), String> {
+    if state.config_loaded.load(Ordering::SeqCst) {
+        Ok(())
+    } else {
+        Err("配置加载失败，请先修复或重新导入 config.json".into())
+    }
+}
+
 #[tauri::command]
 fn get_config(state: State<'_, AppState>) -> Config {
     state.cfg.lock().expect("cfg lock").clone()
@@ -465,12 +597,18 @@ fn save_config(app: AppHandle, cfg: Config, state: State<'_, AppState>) -> Resul
         cfg.width = config::DEFAULT_WIDTH;
     }
     normalize_shortcut_config(&mut cfg);
+    let config_was_loaded = state.config_loaded.load(Ordering::SeqCst);
+    let roots_or_scope_changed = {
+        let current = state.cfg.lock().expect("cfg lock");
+        current.roots != cfg.roots || current.scope != cfg.scope
+    };
     // 安全校验必须先于快捷键注册、AppState 更新与任何落盘副作用。
     cfg.validate()?;
     // 换绑快捷键；失败则保持旧配置与旧键并报错
     apply_shortcuts(&app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
+    state.config_loaded.store(true, Ordering::SeqCst);
     // 自动备份轮换
     let bdir = app.path().app_config_dir().unwrap_or_default().join("config-backups");
     let _ = std::fs::create_dir_all(&bdir);
@@ -480,6 +618,9 @@ fn save_config(app: AppHandle, cfg: Config, state: State<'_, AppState>) -> Resul
         let mut bs: Vec<String> = std::fs::read_dir(&bdir).map(|entries| entries.filter_map(|e| e.ok()).filter_map(|e| e.file_name().to_str().map(String::from)).collect()).unwrap_or_default();
         bs.sort();
         while bs.len() > 5 { let _ = std::fs::remove_file(bdir.join(&bs[0])); bs.remove(0); }
+    }
+    if roots_or_scope_changed || !config_was_loaded {
+        sync_and_reconcile_emit(&app);
     }
     Ok(cfg)
 }
@@ -540,7 +681,7 @@ fn add_search_history(q: String, app: AppHandle, state: State<'_, AppState>) -> 
         cfg.search_history.truncate(20);
     }
     let history = cfg.search_history.clone();
-    config::save(&app, &cfg);
+    save_locked_runtime_config(&app, &mut cfg);
     history
 }
 
@@ -553,9 +694,9 @@ fn get_search_history(state: State<'_, AppState>) -> Vec<String> {
 /// 清空搜索历史
 #[tauri::command]
 fn clear_search_history(app: AppHandle, state: State<'_, AppState>) {
-    state.cfg.lock().expect("cfg lock").search_history.clear();
-    let cfg = state.cfg.lock().expect("cfg lock").clone();
-    config::save(&app, &cfg);
+    let mut cfg = state.cfg.lock().expect("cfg lock");
+    cfg.search_history.clear();
+    save_locked_runtime_config(&app, &mut cfg);
 }
 
 /// 获取范围规则模板（内嵌 JSON）
@@ -567,15 +708,15 @@ fn get_scope_templates() -> String {
 /// 应用范围规则模板
 #[tauri::command]
 fn apply_scope_template(name: String, app: AppHandle, state: State<'_, AppState>) -> Result<Config, String> {
+    require_config_loaded(&state)?;
     let templates: Vec<serde_json::Value> = serde_json::from_str(include_str!("../assets/scope-templates.json")).map_err(|e| e.to_string())?;
     let tpl = templates.iter().find(|t| t["name"] == name).ok_or_else(|| format!("模板不存在: {name}"))?;
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
     if let Some(ex) = tpl["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     if let Some(exts) = tpl["include_exts"].as_array() { cfg.scope.include_exts = exts.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
     config::save(&app, &cfg);
-    let roots = cfg.root_specs();
-    let scope = cfg.scope.clone();
-    let _ = state.engine.sync_roots(&roots, &scope);
+    *state.cfg.lock().expect("cfg lock") = cfg.clone();
+    let _ = sync_and_reconcile(&app);
     Ok(cfg)
 }
 
@@ -619,8 +760,8 @@ fn load_config_profile(app: AppHandle, name: String, state: State<'_, AppState>)
     apply_shortcuts(&app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
-    let roots = cfg.root_specs();
-    if !roots.is_empty() { let scope = cfg.scope.clone(); let _ = state.engine.sync_roots(&roots, &scope); start_watchers(&app); }
+    state.config_loaded.store(true, Ordering::SeqCst);
+    let _ = sync_and_reconcile(&app);
     Ok(cfg)
 }
 
@@ -641,6 +782,7 @@ fn export_scope_rules(state: State<'_, AppState>) -> Result<String, String> {
 /// 导入范围规则 JSON
 #[tauri::command]
 fn import_scope_rules(app: AppHandle, json: String, state: State<'_, AppState>) -> Result<Config, String> {
+    require_config_loaded(&state)?;
     let data: serde_json::Value = serde_json::from_str(&json).map_err(|e| format!("JSON 格式错误: {e}"))?;
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
     if let Some(ex) = data["exclude_globs"].as_array() { cfg.scope.exclude_globs = ex.iter().filter_map(|v| v.as_str().map(String::from)).collect(); }
@@ -649,9 +791,8 @@ fn import_scope_rules(app: AppHandle, json: String, state: State<'_, AppState>) 
     if let Some(kb) = data["max_file_kb"].as_u64() { cfg.scope.max_file_kb = kb; }
     if let Some(days) = data["max_age_days"].as_u64() { cfg.scope.max_age_days = days; }
     config::save(&app, &cfg);
-    let roots = cfg.root_specs();
-    let scope = cfg.scope.clone();
-    let _ = state.engine.sync_roots(&roots, &scope);
+    *state.cfg.lock().expect("cfg lock") = cfg.clone();
+    let _ = sync_and_reconcile(&app);
     Ok(cfg)
 }
 
@@ -1147,6 +1288,7 @@ fn health_check(app: AppHandle, state: State<'_, AppState>) -> Vec<HealthIssue> 
 /// 一键修复全部可修复项：去重根、移除失效根、清洗规则、补齐 git 根、回正值域
 #[tauri::command]
 fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<String>, Config), String> {
+    require_config_loaded(&state)?;
     let mut cfg = state.cfg.lock().expect("cfg lock").clone();
     cfg.validate()?;
     let mut fixed: Vec<String> = Vec::new();
@@ -1341,27 +1483,16 @@ fn health_fix_all(app: AppHandle, state: State<'_, AppState>) -> Result<(Vec<Str
 
     // 有变更才落盘 + 重新同步
     if !fixed.is_empty() {
-        // 同步索引到修复后的范围
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
         *state.cfg.lock().expect("cfg lock") = cfg.clone();
         config::save(&app, &cfg);
-        if !roots.is_empty() {
-            let _ = state.engine.sync_roots(&roots, &scope);
-        }
-        start_watchers(&app);
+        let _ = sync_and_reconcile(&app);
     }
     Ok((fixed, cfg))
 }
 
 #[tauri::command]
-fn rescan(_app: AppHandle, state: State<'_, AppState>) -> Result<Stats, String> {
-    let roots = state.cfg.lock().expect("cfg lock").root_specs();
-    if roots.is_empty() {
-        return Err("尚未设置知识库目录".into());
-    }
-    let scope = state.cfg.lock().expect("cfg lock").scope.clone();
-    state.engine.sync_roots(&roots, &scope)
+fn rescan(app: AppHandle) -> Result<Stats, String> {
+    sync_and_reconcile(&app)
 }
 
 /// 追加一个知识库目录（去重），保存配置、全量同步、重建监听
@@ -1401,16 +1532,10 @@ fn pick_folder(app: AppHandle, state: State<'_, AppState>) -> Result<PickResult,
                 root_max_file_kb: 0,
             });
         }
-        if cfg.knowledge_dir.is_none() {
-            cfg.knowledge_dir = Some(dir_str.clone());
-        }
         config::save(&app, &cfg);
     }
 
-    let roots = state.cfg.lock().expect("cfg lock").root_specs();
-    let scope = state.cfg.lock().expect("cfg lock").scope.clone();
-    let stats = state.engine.sync_roots(&roots, &scope).ok();
-    start_watchers(&app);
+    let stats = sync_and_reconcile(&app).ok();
     let dirs = state
         .cfg
         .lock()
@@ -1477,6 +1602,7 @@ fn save_stopwords(app: AppHandle, text: String) -> Result<(), String> {
 /// 保存当前配置为命名范围预设
 #[tauri::command]
 fn save_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    require_config_loaded(&state)?;
     let mut cfg = state.cfg.lock().expect("cfg lock");
     let name = name.trim().to_string();
     if name.is_empty() { return Err("预设名不能为空".into()); }
@@ -1510,16 +1636,15 @@ fn load_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -
     // 后端仍用旧范围，预设"应用"实际不生效——v0.6.1 起的存量缺陷）
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(&app, &cfg);
-    start_watchers(&app);
-    let roots = cfg.root_specs();
-    let scope = cfg.scope.clone();
-    let _ = state.engine.sync_roots(&roots, &scope);
+    state.config_loaded.store(true, Ordering::SeqCst);
+    let _ = sync_and_reconcile(&app);
     Ok(cfg)
 }
 
 /// 删除范围预设
 #[tauri::command]
 fn delete_scope_preset(app: AppHandle, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    require_config_loaded(&state)?;
     let mut cfg = state.cfg.lock().expect("cfg lock");
     cfg.presets.retain(|p| p.name != name);
     let cfg_clone = cfg.clone();
@@ -1617,12 +1742,8 @@ fn apply_import_path(app: &AppHandle, state: &State<'_, AppState>, path: &str) -
     apply_shortcuts(app, &cfg).map_err(|e| format!("快捷键注册失败: {e}"))?;
     *state.cfg.lock().expect("cfg lock") = cfg.clone();
     config::save(app, &cfg);
-    let roots = cfg.root_specs();
-    if !roots.is_empty() {
-        let scope = cfg.scope.clone();
-        let _ = state.engine.sync_roots(&roots, &scope);
-        start_watchers(app);
-    }
+    state.config_loaded.store(true, Ordering::SeqCst);
+    let _ = sync_and_reconcile(app);
     // WebDAV 源：导入后立即验证凭据并重建镜像（跨机导入的密文
     // 解不开 → last_error 标记提示重新填写密码）
     for s in &cfg.webdav_sources {
@@ -2019,7 +2140,7 @@ fn git_record_error(app: &AppHandle, name: &str, err: &str) {
     if let Some(s) = cfg.git_sources.iter_mut().find(|s| s.name == name) {
         s.last_error = Some(err.to_string());
     }
-    config::save(app, &cfg);
+    save_locked_runtime_config(app, &mut cfg);
 }
 
 /// 对单个 git 源执行浅拉取并同步索引（手动与定时共用）
@@ -2038,22 +2159,16 @@ fn git_pull_one(app: &AppHandle, name: &str) -> Result<String, String> {
         (src.branch.clone(), src.url.clone(), repo_source_dir(app, &src.name)?)
     };
     let msg = gitsync::pull_repo(&dir, &url, &branch)?;
-    // 成功：更新时间戳并触发索引同步（在 git 锁外做引擎同步，避免长持锁）
-    let stats = {
+    // 成功：更新时间戳并触发索引同步。
+    {
         let mut cfg = state.cfg.lock().expect("cfg lock");
         if let Some(s) = cfg.git_sources.iter_mut().find(|s| s.name == name) {
             s.last_sync = Some(gitsync::now_secs());
             s.last_error = None;
         }
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
-        config::save(app, &cfg);
-        if roots.is_empty() {
-            None
-        } else {
-            state.engine.sync_roots(&roots, &scope).ok()
-        }
+        save_locked_runtime_config(app, &mut cfg);
     };
+    let stats = sync_and_reconcile(app).ok();
     if let Some(st) = stats {
         let _ = app.emit("index-updated", &st);
     }
@@ -2125,7 +2240,7 @@ fn git_clone_blocking(
         branch.trim().to_string()
     };
 
-    let (roots, scope) = {
+    {
         // 先在候选副本上完成完整校验；失败时绝不修改 AppState 或写盘。
         let mut cfg = state.cfg.lock().expect("cfg lock").clone();
         let dir_str = dir.to_string_lossy().to_string();
@@ -2150,20 +2265,12 @@ fn git_clone_blocking(
                 root_max_file_kb: 0,
             });
         }
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
         *state.cfg.lock().expect("cfg lock") = cfg.clone();
         config::save(app, &cfg);
-        (roots, scope)
     };
     drop(_guard);
 
-    let stats = if roots.is_empty() {
-        None
-    } else {
-        state.engine.sync_roots(&roots, &scope).ok()
-    };
-    start_watchers(app);
+    let stats = sync_and_reconcile(app).ok();
     if let Some(st) = stats {
         let _ = app.emit("index-updated", &st);
     }
@@ -2215,14 +2322,9 @@ fn git_remove_blocking(app: &AppHandle, name: String) -> Result<Config, String> 
         }
         cfg.roots
             .retain(|r| r.path != dir.to_string_lossy().to_string());
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
         config::save(app, &cfg);
-        if !roots.is_empty() {
-            let _ = state.engine.sync_roots(&roots, &scope);
-        }
     }
-    start_watchers(app);
+    let _ = sync_and_reconcile(app);
     // 删除克隆目录（best-effort，失败不影响配置移除）
     let _ = gitsync::remove_repo_dir(&repos_dir(app), &name);
     let cfg_out = state.cfg.lock().expect("cfg lock").clone();
@@ -2285,7 +2387,7 @@ fn webdav_record_error(app: &AppHandle, name: &str, err: &str) {
     if let Some(s) = cfg.webdav_sources.iter_mut().find(|s| s.name == name) {
         s.last_error = Some(err.to_string());
     }
-    config::save(app, &cfg);
+    save_locked_runtime_config(app, &mut cfg);
 }
 
 /// WebDAV 诊断日志（临时，写入系统临时目录）
@@ -2363,21 +2465,15 @@ fn webdav_sync_one(app: &AppHandle, name: &str) -> Result<String, String> {
     save_mirror(app, name, &mirror)?;
 
     // 触发索引增量同步（镜像目录已是知识根）
-    let stats = {
+    {
         let mut cfg = state.cfg.lock().expect("cfg lock");
         if let Some(s) = cfg.webdav_sources.iter_mut().find(|s| s.name == name) {
             s.last_sync = Some(gitsync::now_secs());
             s.last_error = None;
         }
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
-        config::save(app, &cfg);
-        if roots.is_empty() {
-            None
-        } else {
-            state.engine.sync_roots(&roots, &scope).ok()
-        }
+        save_locked_runtime_config(app, &mut cfg);
     };
+    let stats = sync_and_reconcile(app).ok();
     if let Some(st) = stats {
         let _ = app.emit("index-updated", &st);
     }
@@ -2530,7 +2626,7 @@ fn webdav_add_blocking(
     //（密码 DPAPI 加密后落盘）。
     let stored_password = webdav::dpapi_encrypt(&password)
         .map_err(|e| format!("凭据加密失败: {e}"))?;
-    let (roots, scope) = {
+    {
         let mut cfg = state.cfg.lock().expect("cfg lock").clone();
         cfg.webdav_sources.push(config::WebdavSource {
             name: name.clone(),
@@ -2554,19 +2650,12 @@ fn webdav_add_blocking(
                 root_max_file_kb: 0,
             });
         }
-        let roots = cfg.root_specs();
-        let scope = cfg.scope.clone();
         *state.cfg.lock().expect("cfg lock") = cfg.clone();
         config::save(app, &cfg);
-        (roots, scope)
     };
     drop(_guard);
 
-    // 索引增量同步
-    if !roots.is_empty() {
-        let _ = state.engine.sync_roots(&roots, &scope);
-    }
-    start_watchers(app);
+    let _ = sync_and_reconcile(app);
     let cfg_out = state.cfg.lock().expect("cfg lock").clone();
     Ok(cfg_out)
 }
@@ -2611,14 +2700,9 @@ async fn webdav_remove(app: AppHandle, name: String) -> Result<Config, String> {
             }
             cfg.roots
                 .retain(|r| r.path != dir.to_string_lossy().to_string());
-            let roots = cfg.root_specs();
-            let scope = cfg.scope.clone();
             config::save(&app, &cfg);
-            if !roots.is_empty() {
-                let _ = state.engine.sync_roots(&roots, &scope);
-            }
         }
-        start_watchers(&app);
+        let _ = sync_and_reconcile(&app);
         // 配置保存与监听切换后再次校验，删除只允许落在本次源自己的边界内。
         let dir = webdav_source_dir(&app, &name)?;
         let meta = webdav_meta(&app, &name)?;
@@ -2646,10 +2730,10 @@ fn save_position_throttled(app: &AppHandle, x: i32, y: i32) {
     }
     LAST_SAVE_MS.store(now, Ordering::Relaxed);
     let state: State<AppState> = app.state();
-    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    let mut cfg = state.cfg.lock().expect("cfg lock");
     cfg.x = Some(x);
     cfg.y = Some(y);
-    config::save(app, &cfg);
+    save_locked_runtime_config(app, &mut cfg);
 }
 
 fn save_position_final(app: &AppHandle) {
@@ -2658,10 +2742,10 @@ fn save_position_final(app: &AppHandle) {
         return;
     }
     let state: State<AppState> = app.state();
-    let mut cfg = state.cfg.lock().expect("cfg lock").clone();
+    let mut cfg = state.cfg.lock().expect("cfg lock");
     cfg.x = Some(x as i32);
     cfg.y = Some(y as i32);
-    config::save(app, &cfg);
+    save_locked_runtime_config(app, &mut cfg);
 }
 
 /// 保存的位置是否落在某个显示器范围内
@@ -2691,7 +2775,11 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
-            let cfg = config::load(&handle);
+            let (cfg, config_error) = match config::load(&handle) {
+                Ok(cfg) => (cfg, None),
+                Err(error) => (Config::default(), Some(error)),
+            };
+            let config_loaded = config_error.is_none();
 
             // 检索引擎：打开持久化索引（秒开），同义词 = 内嵌默认 + 用户覆盖
             let data_dir = handle
@@ -2711,6 +2799,9 @@ pub fn run() {
                 logging::init(log_dir);
             }
             kdlog!(info, "app", "知识悬浮搜索 v{} 启动", env!("CARGO_PKG_VERSION"));
+            if let Some(error) = &config_error {
+                kdlog!(warn, "config", "配置加载失败，保留现有索引且不启动同步: {error}");
+            }
 
             // 先注册全局状态（后续 setup 内的所有 state() 访问都依赖它）
             let engine_for_api = engine.clone();
@@ -2719,13 +2810,21 @@ pub fn run() {
                 cfg: Mutex::new(cfg.clone()),
                 dialog_open: AtomicBool::new(false),
                 watcher: Mutex::new(None),
+                sync_lock: Mutex::new(()),
+                watcher_resync: AtomicBool::new(false),
+                config_loaded: AtomicBool::new(config_loaded),
                 git_lock: Mutex::new(()),
                 webdav_lock: Mutex::new(()),
                 apps_cache: Mutex::new(None),
                 selection_control: Mutex::new(SelectionControl::default()),
                 pending_selection: Mutex::new(VecDeque::new()),
-                startup_warning: Mutex::new(None),
+                startup_warning: Mutex::new(config_error.map(|error| format!("配置加载失败，已保留现有索引：{error}"))),
             });
+
+            // 先同步到配置层启用根；零根在 HTTP 接口暴露前完成清索引与停监听。
+            if config_loaded {
+                sync_and_reconcile_emit(&handle);
+            }
 
             // 本地 HTTP 检索接口（供其它程序调用；端口/token 在 config.api，改动需重启）
             if cfg.api.enabled {
@@ -2771,16 +2870,16 @@ pub fn run() {
                     "show-hide" => toggle_visible(app),
                     "pin" => {
                         let state: State<AppState> = app.state();
-                        let (new_pin, cfg_snapshot) = {
-                            let mut c = state.cfg.lock().expect("cfg lock");
-                            c.pin_mode = !c.pin_mode;
-                            (c.pin_mode, c.clone())
+                        let new_pin = {
+                            let mut cfg = state.cfg.lock().expect("cfg lock");
+                            cfg.pin_mode = !cfg.pin_mode;
+                            save_locked_runtime_config(app, &mut cfg);
+                            cfg.pin_mode
                         };
-                        config::save(app, &cfg_snapshot);
                         let _ = app.emit("pin-mode-changed", new_pin);
                     }
                     "rescan" => {
-                        sync_and_emit(app);
+                        sync_and_reconcile_emit(app);
                     }
                     "autostart" => {
                         let enable = !autostart_enabled();
@@ -2816,18 +2915,13 @@ pub fn run() {
                 kdlog!(warn, "shortcut", "启动快捷键回退：{e}；划词搜索已关闭");
                 {
                     let state: State<AppState> = handle.state();
-                    *state.cfg.lock().expect("cfg lock") = runtime_cfg.clone();
+                    let mut cfg = state.cfg.lock().expect("cfg lock");
+                    *cfg = runtime_cfg;
+                    save_locked_runtime_config(&handle, &mut cfg);
                     *state.startup_warning.lock().expect("startup warning lock") = Some(format!(
                         "快捷键注册失败，已暂时关闭划词搜索并回退可用绑定：{e}"
                     ));
                 }
-                config::save(&handle, &runtime_cfg);
-            }
-
-            // 后台校验/构建索引（已建好则 stat 秒过），并挂多根文件监听
-            if !cfg.effective_roots().is_empty() {
-                sync_and_emit(&handle);
-                start_watchers(&handle);
             }
 
             // git 仓库定时更新调度（每 30s 检查到期源）
@@ -3011,5 +3105,78 @@ mod selection_integration_tests {
             fit_window_to_area(-100, 100, 300, 600, &areas),
             Some((0, 100, 300, 600))
         );
+    }
+}
+
+#[cfg(test)]
+mod zero_root_watcher_tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("kd-zero-watcher-{name}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn watcher_session<F>(root: &std::path::Path, on_debounce: F) -> WatcherSession
+    where
+        F: FnMut() + Send + 'static,
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = notify::recommended_watcher(tx).unwrap();
+        watcher.watch(root, RecursiveMode::Recursive).unwrap();
+        WatcherSession {
+            watcher,
+            pump: spawn_watcher_pump(rx, on_debounce),
+        }
+    }
+
+    #[test]
+    fn zero_root_watcher_pending_event_forces_followup_scan() {
+        let pending = AtomicBool::new(false);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let stats = sync_until_quiet(&pending, || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                pending.store(true, Ordering::SeqCst);
+            }
+            Ok(Stats::default())
+        })
+        .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(stats.docs, 0);
+        assert!(!pending.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn zero_root_watcher_session_stops_and_rebuilds() {
+        let root = temp_dir("lifecycle");
+        let source = root.join("watched.md");
+        let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+        let stopped = watcher_session(&root, move || {
+            let _ = stopped_tx.send(());
+        });
+        assert!(stopped.stop(), "零根释放 watcher 后泵线程必须退出");
+
+        std::fs::write(&source, "after zero root").unwrap();
+        assert!(
+            stopped_rx.recv_timeout(Duration::from_millis(1200)).is_err(),
+            "旧 watcher 停止后修改文件不得触发同步"
+        );
+
+        let (rebuilt_tx, rebuilt_rx) = std::sync::mpsc::channel();
+        let rebuilt = watcher_session(&root, move || {
+            let _ = rebuilt_tx.send(());
+        });
+        std::fs::write(&source, "after root restored").unwrap();
+        assert!(
+            rebuilt_rx.recv_timeout(Duration::from_secs(4)).is_ok(),
+            "重新添加根后 watcher 必须恢复事件"
+        );
+        assert!(rebuilt.stop());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

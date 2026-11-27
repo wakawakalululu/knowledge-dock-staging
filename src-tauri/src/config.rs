@@ -80,11 +80,11 @@ pub struct WebdavSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// v0.3 兼容字段：等价于 knowledge_dirs 单元素；仅作迁移来源保留
-    #[serde(default)]
+    /// v0.3 兼容字段：只读迁移来源，不再写回
+    #[serde(default, skip_serializing)]
     pub knowledge_dir: Option<String>,
-    /// v0.4 兼容字段：迁移来源保留
-    #[serde(default)]
+    /// v0.4 兼容字段：只读迁移来源，不再写回
+    #[serde(default, skip_serializing)]
     pub knowledge_dirs: Vec<String>,
     /// v0.5 规范字段：结构化知识库根
     #[serde(default)]
@@ -253,10 +253,27 @@ impl Config {
         Ok(())
     }
 
-    /// 配置 JSON 的统一反序列化入口：解析后立即做安全校验。
+    /// 配置 JSON 的统一反序列化入口：解析、安全校验、旧字段迁移与容错回正。
     pub fn from_json(json: &str) -> Result<Config, String> {
-        let cfg: Config = serde_json::from_str(json).map_err(|e| format!("配置格式错误: {e}"))?;
+        let value: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| format!("配置格式错误: {e}"))?;
+        let roots_are_explicit = value.get("roots").is_some();
+        let mut cfg: Config =
+            serde_json::from_value(value).map_err(|e| format!("配置格式错误: {e}"))?;
         cfg.validate()?;
+        if !roots_are_explicit {
+            migrate(&mut cfg);
+        }
+        cfg.knowledge_dir = None;
+        cfg.knowledge_dirs.clear();
+        if cfg.width < 320.0 || cfg.width > 1600.0 { cfg.width = 600.0; }
+        if cfg.roots.iter().any(|r| r.path.is_empty()) {
+            cfg.roots.retain(|r| !r.path.is_empty());
+        }
+        if cfg.scope.max_file_kb == 0 { cfg.scope.max_file_kb = 4096; }
+        if cfg.scope.include_exts.is_empty() {
+            cfg.scope.include_exts = vec!["md".into(), "markdown".into(), "txt".into()];
+        }
         Ok(cfg)
     }
 }
@@ -276,33 +293,13 @@ fn config_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     Some(dir.join("config.json"))
 }
 
-pub fn load(app: &tauri::AppHandle) -> Config {
-    let Some(path) = config_path(app) else {
-        return Config::default();
-    };
-    let mut cfg: Config = match fs::read_to_string(path) {
-        Ok(s) => match Config::from_json(&s) {
-            Ok(c) => c,
-            // 解析或安全校验失败不静默：保留原文件，打日志后回退默认配置。
-            Err(e) => {
-                crate::kdlog!(warn, "config", "config.json 解析/校验失败，回退默认配置: {e}");
-                Config::default()
-            }
-        },
-        Err(_) => Config::default(),
-    };
-    migrate(&mut cfg);
-    // 容错校验：无效值回退默认
-    if cfg.width < 320.0 || cfg.width > 1600.0 { cfg.width = 600.0; }
-    if cfg.roots.iter().any(|r| r.path.is_empty()) {
-        cfg.roots.retain(|r| !r.path.is_empty());
-    }
-    if cfg.scope.max_file_kb == 0 { cfg.scope.max_file_kb = 4096; }
-    if cfg.scope.include_exts.is_empty() { cfg.scope.include_exts = vec!["md".into(), "markdown".into(), "txt".into()]; }
-    cfg
+pub fn load(app: &tauri::AppHandle) -> Result<Config, String> {
+    let path = config_path(app).ok_or_else(|| "无法定位 config.json".to_string())?;
+    let json = fs::read_to_string(&path).map_err(|e| format!("读取 config.json 失败: {e}"))?;
+    Config::from_json(&json).map_err(|e| format!("config.json 解析/校验失败: {e}"))
 }
 
-/// 旧版字段迁移：roots 为空时由 knowledge_dirs / knowledge_dir 合成
+/// 旧版字段迁移：仅当 JSON 未出现 roots 时由 knowledge_dirs / knowledge_dir 合成
 fn migrate(cfg: &mut Config) {
     if !cfg.roots.is_empty() {
         return;
@@ -406,6 +403,25 @@ mod tests {
         assert!(!cfg.selection_search_enabled);
         assert_eq!(cfg.git_sources[0].name, "repo-1");
         assert_eq!(cfg.webdav_sources[0].name, "中文 源");
+    }
+
+    #[test]
+    fn zero_root_config_parse_migrates_legacy_roots() {
+        let cfg = Config::from_json(r#"{"knowledge_dirs":["C:/legacy"]}"#).unwrap();
+        assert_eq!(cfg.effective_roots().len(), 1);
+        assert_eq!(cfg.effective_roots()[0].path, "C:/legacy");
+        assert!(cfg.knowledge_dirs.is_empty());
+
+        let cfg = Config::from_json(
+            r#"{"roots":[],"knowledge_dir":"C:/legacy","knowledge_dirs":["C:/legacy"]}"#,
+        )
+        .unwrap();
+        assert!(cfg.effective_roots().is_empty());
+        assert!(cfg.knowledge_dir.is_none());
+        assert!(cfg.knowledge_dirs.is_empty());
+        let saved = serde_json::to_value(&cfg).unwrap();
+        assert!(saved.get("knowledge_dir").is_none());
+        assert!(saved.get("knowledge_dirs").is_none());
     }
 
     #[test]

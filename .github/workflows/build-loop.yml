@@ -52,6 +52,9 @@ jobs:
       - name: Run path security tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib path_security -- --nocapture
 
+      - name: Run zero root lifecycle tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib zero_root -- --nocapture
+
       - name: Build dev-release
         run: npm run build:loop
 

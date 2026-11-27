@@ -91,3 +91,11 @@
 - **清理**: 最终 portable/mock/测试宿主进程数 0，18230/18765 LISTEN 数 0；临时语法根、导入夹具、测试镜像与隔离应用数据已删除；用户配置恢复为原始 SHA-256 `C23723E31910B6739260D3D1D206A7E7CF132D216D505B9C7DDF0D25E8DC29EE`，划词与回退保持默认关闭。
 - **单测状态**: 本地 GNU 测试 exe 的 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND` 仍作为独立环境阻塞保留；本轮测试通过证据来自 Windows CI 的独立执行。
 - **下一步行动**: 产品层闭环，无未解决的产品缺陷；补充本文档后以新的文档提交推 staging，不修改已验证代码提交。
+
+### Iteration #5 - 2026-11-27T00:21:13Z
+
+- **改动要点**: 定义配置层有效知识根为空即空索引；`sync_roots` 对零根执行 `delete_all_documents`、commit、reader reload 并持久化空 manifest；启动、配置保存/导入、增删根、Git/WebDAV 操作与 rescan 统一同步并停止或重建 watcher；同步与监听替换串行化，零根先释放 watcher 并 join 泵线程再清索引，配置读取失败时拒绝把默认空 roots 当作零根；范围模板/导入同步更新 AppState；新增索引清零/重开/非空坏根边界与 watcher 停止/重建定向测试，并加入两个 Windows 工作流正式构建前门禁。
+- **独立复审修复**: 被动配置保存改为持 `cfg` 锁修改最新状态，消除位置/托盘等旧快照覆盖新根配置的竞态；旧 `knowledge_dir(s)` 仅在 JSON 未出现 `roots` 时迁移，读取后清空且不再序列化，显式空 roots 或全停用重启不会重新启用旧根；监听竞争事件通过待扫标记触发补扫。按本轮明确排除项，不扩展配置写盘错误/备份时序重构。
+- **本地门禁**: `node --check ui/app.js`、`VERSION_OK 0.8.44 (6 locations)`、npm 锁文件校验、三种划词前端回归、`cargo check --tests --locked` 与 `loop_driver.sh precheck` 均通过；precheck 输出 `PRECHECK_OK c4d94b536d74497bb40cf39d115ca59a3086f9d0`，仅保留两个存量 warning。
+- **定向测试**: `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib zero_root -- --nocapture` 完成编译，但测试 exe 仍在启动阶段退出 `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`，未进入断言，记录为“编译通过、执行受阻”；以 Windows CI 的实际执行结果作为测试证据。
+- **下一步行动**: 完成最终 diff 复核后提交 v0.8.44，仅推 staging；等待 exact-SHA CI、确认 zero_root 实际执行并下载产物，随后完成隔离 portable 生命周期与回归实机审计。

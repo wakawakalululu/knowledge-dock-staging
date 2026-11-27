@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 一个知识库根：路径 + 显示名 + 启用开关（可临时停用而不删除）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KnowledgeRoot {
     pub path: String,
     /// 显示名（面包屑/根筛选 chips 用）；空 = 取目录名
@@ -38,7 +38,7 @@ pub struct RootSpec {
 }
 
 /// 搜寻范围规则
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScopeConfig {
     /// 排除规则（相对知识库根的路径）：
     /// - `dir/`  → 排除该目录下所有文件

@@ -376,6 +376,8 @@ impl Engine {
     pub fn sync_roots(&self, roots: &[crate::scope::RootSpec], scope: &ScopeConfig) -> Result<Stats, String> {
         let started = std::time::Instant::now();
         if roots.is_empty() {
+            self.clear_index()?;
+            crate::kdlog!(info, "engine", "启用知识根为空，索引与清单已清空");
             return Ok(Stats::default());
         }
         let multi = roots.len() > 1;
@@ -489,6 +491,17 @@ impl Engine {
         );
 
         Ok(stats)
+    }
+
+    fn clear_index(&self) -> Result<(), String> {
+        let manifest_path = self.index_dir.join("manifest.json");
+        let mut manifest = self.manifest.lock().expect("manifest lock");
+        let mut writer = self.writer.lock().expect("writer lock");
+        writer.delete_all_documents().map_err(|e| e.to_string())?;
+        writer.commit().map_err(|e| e.to_string())?;
+        self.reader.reload().map_err(|e| e.to_string())?;
+        manifest.clear();
+        std::fs::write(&manifest_path, "{}").map_err(|e| format!("写入空索引清单失败: {e}"))
     }
 
     /// 当前生效的同义词词典（默认 + 用户覆盖合并后）
@@ -1038,5 +1051,115 @@ mod tests {
             assert_eq!(result.hits.len(), 1);
             assert_eq!(result.hits[0].title, "其他标题");
         });
+    }
+}
+
+#[cfg(test)]
+mod zero_root_tests {
+    use super::*;
+    use crate::scope::RootSpec;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("kd-zero-root-{name}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn spec(path: &std::path::Path, label: &str) -> RootSpec {
+        RootSpec {
+            path: path.to_path_buf(),
+            label: label.into(),
+            excludes: Vec::new(),
+            exts: Vec::new(),
+            max_file_kb: 0,
+        }
+    }
+
+    fn add_test_doc(engine: &Engine, abs: &str, title: &str, text: &str) {
+        let mut writer = engine.writer.lock().unwrap();
+        engine.add_doc(
+            &mut writer,
+            &DocumentChunk {
+                doc_type: "Note".into(),
+                breadcrumbs: vec!["zero-root".into()],
+                title: title.into(),
+                path: format!("{title}.md"),
+                abs: abs.into(),
+                text: text.into(),
+                line: 1,
+            },
+            "test",
+            1,
+        );
+        writer.commit().unwrap();
+        engine.reader.reload().unwrap();
+    }
+
+    #[test]
+    fn zero_root_clears_documents_manifest_and_survives_reopen() {
+        let root = temp_dir("knowledge");
+        let index = temp_dir("index");
+        let source = root.join("unique.md");
+        let original = "# 零根测试\n\nzqzerorootneedle 唯一内容。\n";
+        std::fs::write(&source, original).unwrap();
+        let engine = Engine::open_or_create(&index, HashMap::new(), HashSet::new()).unwrap();
+
+        let initial = engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
+        assert_eq!(initial.docs, 1);
+        assert!(engine.num_docs() > 0);
+        assert!(!engine.manifest.lock().unwrap().is_empty());
+        assert!(!engine.search("zqzerorootneedle", 10, None, None).hits.is_empty());
+
+        add_test_doc(&engine, &index.join("orphan.md").display().to_string(), "orphan", "zqzerorootorphan");
+        assert!(engine.num_docs() > initial.chunks as u64);
+
+        let cleared = engine.sync_roots(&[], &ScopeConfig::default()).unwrap();
+        assert_eq!(cleared.docs, 0);
+        assert_eq!(cleared.chunks, 0);
+        assert_eq!(engine.num_docs(), 0);
+        assert_eq!(engine.stats().docs, 0);
+        assert_eq!(engine.stats().chunks, 0);
+        assert!(engine.manifest.lock().unwrap().is_empty());
+        assert!(engine.search("zqzerorootneedle", 10, None, None).hits.is_empty());
+        assert!(engine.search_literal("zqzerorootneedle", 10, None, None).hits.is_empty());
+        assert_eq!(std::fs::read_to_string(index.join("manifest.json")).unwrap(), "{}");
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+
+        drop(engine);
+        let reopened = Engine::open_or_create(&index, HashMap::new(), HashSet::new()).unwrap();
+        assert_eq!(reopened.num_docs(), 0);
+        assert_eq!(reopened.stats().docs, 0);
+        assert!(reopened.manifest.lock().unwrap().is_empty());
+        assert!(reopened.search("zqzerorootneedle", 10, None, None).hits.is_empty());
+
+        let restored = reopened.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
+        assert_eq!(restored.docs, 1);
+        assert!(!reopened.search("zqzerorootneedle", 10, None, None).hits.is_empty());
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(index).unwrap();
+    }
+
+    #[test]
+    fn zero_root_nonempty_roots_skip_explicit_clear() {
+        let root = temp_dir("missing-knowledge").join("missing");
+        let index = temp_dir("orphan-index");
+        let engine = Engine::open_or_create(&index, HashMap::new(), HashSet::new()).unwrap();
+        add_test_doc(&engine, &index.join("orphan.md").display().to_string(), "orphan", "zqnonemptyorphan");
+        assert_eq!(engine.manifest.lock().unwrap().len(), 0);
+        assert_eq!(engine.num_docs(), 1);
+
+        let stats = engine.sync_roots(&[spec(&root, "test")], &ScopeConfig::default()).unwrap();
+        assert_eq!(stats.docs, 0);
+        assert_eq!(engine.num_docs(), 1, "非空根不能进入 delete_all_documents 的显式清零路径");
+        assert_eq!(engine.search("zqnonemptyorphan", 10, None, None).hits.len(), 1);
+
+        drop(engine);
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(index).unwrap();
     }
 }

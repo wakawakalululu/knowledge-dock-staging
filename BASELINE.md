@@ -3,7 +3,7 @@
 > 本文件是 knowledge-dock 的**权威工程基线**：开发环境、迭代闭环、发布规则、验证标准与已知环境坑。
 > 所有改动必须遵循；偏离需在此文件记录原因与例外。
 >
-> 最后更新：v0.8.43（WebDAV 镜像路径与同步源名安全加固）
+> 最后更新：v0.8.44（零启用根索引生命周期与残留清理）
 
 ## 1. 仓库与发布通道
 
@@ -109,6 +109,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | 前端语法 | `node --check ui/app.js` | 无语法错 |
 | 前端划词回归 | `node tools/selection-ui-test.js`（完整 app.js + DOM/Tauri VM mock），另跑 `once`/`always` 监听失败模式 | 字面量参数、不写历史、竞态失效、启动监听顺序、关键监听失败时不发 ready、设置字段全部通过 |
 | 路径安全回归 | `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib path_security -- --nocapture`（Windows CI 必跑） | 远端相对路径、集合边界、来源名、大小写冲突、根/子级 junction 逃逸、Unicode XML/URL 解码与删除哨兵断言全部通过；本地 GNU 测试 exe 启动失败时不得记为通过 |
+| 零根生命周期回归 | `cargo test --manifest-path src-tauri/Cargo.toml --locked --lib zero_root -- --nocapture`（两个 Windows 工作流正式构建前必跑） | 先有文档再清零、`num_docs=0`、manifest 为空、搜索无结果、重开仍为零、非空 roots 不进入显式清零、watcher 停止后无事件且重建后可监听 |
 | 前端冒烟 | 复制 `ui/` 到临时目录 + 注入 `window.__TAURI__` stub（mock invoke：get_config/search/search_apps/list_history/rescan 全覆盖）+ 本地 http-server | 关键 DOM 交互/渲染断言通过 |
 | HTTP API | `node tools/quiz-test.js`、`node tools/syntax-test.js` | 全部用例通过（检索/过滤/语法/AI 降级）；任一断言失败必须返回非零退出码 |
 | 后端诊断 | `cargo run --bin sync_diag`、`import_diag` | 逐根扫描正常；配置可解析 |
@@ -129,6 +130,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 ## 8. 架构约束（防止回归）
 
 - **单根失败不得中断全局**：`sync_roots`/`start_watchers` 对坏根跳过并记日志
+- **零启用根等于空索引**：只有配置层有效 roots 为空才进入显式 `delete_all_documents` + commit/reload + 空 manifest 持久化路径；启动、保存/导入、增删根、Git/WebDAV 移除与 rescan 统一同步并重建监听。同步与监听替换串行化，零根先释放 watcher 并等待泵线程退出再清索引，重加根后重建；配置读取/校验失败时默认空 roots 不是权威状态，禁止据此清零；显式 `roots` 字段优先于旧 `knowledge_dir(s)`，旧字段只读迁移且不再写回；被动配置保存必须持 `cfg` 锁基于最新状态落盘，不得回写旧快照；非空 roots 的扫描失败不得改判为零根。索引清理绝不删除用户知识文件
 - **新结果集必须失效前端缓存**：`ctxCache/ctxOpen/aiKeep/foldExpanded` 随 doSearch 重置
 - **窗口形态变化只走 `update_view()`**（set_expanded + hidden + render），不得裸调 render
 - **拖拽区**：`data-tauri-drag-region` 只放在专用拖拽元素（`.s-icon`），不得放父容器
@@ -164,6 +166,7 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | 本地 `cargo check` / `cargo test` 报 `dlltool.exe`、`gcc.exe` 或 `windres` not found | Git Bash 登录环境未包含 MSYS2 ucrt64 与 Rust GNU 自包含链接工具 | 执行 `PATH="/c/msys64/ucrt64/bin:/c/Users/Admin/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained:$HOME/.cargo/bin:$PATH" cargo ...`；`precheck` 在 Windows 分支也要显式设置该 PATH |
 | `loop_driver.sh` 在原生 Git Bash 找不到 `/mnt/c/.../node.exe` | 驱动脚本原先只按 WSL 路径探测 Windows 工具 | 同时探测 `/mnt/c` 与 `/c`，`win_path` 优先 `wslpath`、其次 `cygpath`；MSYS2  manifest 路径按实际根路径归一化 |
 | `cargo test` 编译成功后测试 exe 报 `STATUS_ENTRYPOINT_NOT_FOUND` | 测试可执行文件在主机运行时启动失败，尚未进入断言 | 用 `ldd` / `objdump` 排查 MSYS2 DLL；未解决前不得宣称单测通过，以 CI 构建结果作为独立验证 |
+| 删除/停用最后一个知识根后旧内容仍可搜、重启复活或旧 watcher 留活 | 空 roots 被当成“无需同步”，索引/manifest 与监听会话未显式收敛；先清后停还可能被旧回调回写 | 有效 roots 为空必须走串行 reconcile：先释放 watcher 并 join 泵线程，再清索引并持久化空 manifest；配置读取失败与非空坏根不得借用此清零路径 |
 | `OpenClipboard(NULL)` 恢复文本时 `SetClipboardData` 失败 | `EmptyClipboard` 会把剪贴板 owner 置空 | 划词回退必须用本次采集期间存在的合法隐藏消息窗口打开/恢复剪贴板；复制后还需复核 owner 归属与全部格式，不能仅凭序列号变化 |
 | `CloseClipboard` 后 `GetClipboardSequenceNumber` 递增 | Windows 可能在关窗时延迟提交 `CF_LOCALE` 等格式；关窗前读到的序列号会立即过期 | 快照和 Ctrl+C 结果都在关窗后复核稳定序列号，再用于并发检测/恢复；不要直接返回 guard 内的旧序列号 |
 | `/api/health` 已通但 schema 重建期间查询全为 0 | 健康探针只证明 HTTP 就绪，不证明首个索引 commit 已可见 | 重建场景先轮询 `/api/stats` 的 `stats.total_docs > 0` 再跑回归；截图前用第二次实例触发单实例 `reveal` |
@@ -190,3 +193,4 @@ bash .claude/skills/rust-ci-dev-loop/scripts/loop_driver.sh fetch_run knowledge-
 | 2026-11-25 | v0.8.41 | mtime 写入 Tantivy 数值索引；时间窗在 TopDocs 前过滤；schema 升至 6 并自动重建旧索引 |
 | 2026-11-25 | v0.8.42 | 接入可选划词自动搜索：独立快捷键、UIA 只读优先、受控 Ctrl+C 纯文本回退、字面量检索、不写历史、启动事件队列、连续触发合并、`request_id` 与竞态防护、工作区窗口约束；恢复增加稳定序列号复核、owner 校验和双副本重放；Windows 绑定统一为 0.62，补充前端 mock 回归 |
 | 2026-11-27 | v0.8.43 | 新增统一路径安全模块；修复 WebDAV 集合边界、反斜杠/盘符逃逸与删除路径；配置加载/保存/Profile/导入统一校验同步源名；补充 `path_security` 定向测试与 Windows CI 门禁 |
+| 2026-11-27 | v0.8.44 | 定义有效知识根为空即空索引；统一启动/配置/增删根/远程源移除/rescan 的索引与 watcher 收敛；新增 `zero_root` 索引持久化、非空根边界与监听停止/重建测试，并加入两个 Windows 工作流构建前门禁 |

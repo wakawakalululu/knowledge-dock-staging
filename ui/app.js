@@ -1543,7 +1543,6 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
       max_file_kb: Number($setMaxkb.value) || 4096,
       max_age_days: Math.max(0, Number($setMaxage.value) || 0),
     };
-    const dirs = cfg.roots.map((r) => r.path);
     // AI 配置：API Key 输入为空沿用旧密文；输入新值则 DPAPI 加密落盘
     const newKey = $aiKey.value.trim();
     let aiKeyStored = (cfg.ai && cfg.ai.api_key) || "";
@@ -1552,8 +1551,6 @@ document.getElementById("btn-apply").addEventListener("click", async () => {
     }
     const next = {
       ...cfg,
-      knowledge_dirs: dirs,
-      knowledge_dir: dirs[0] ?? null,
       shortcut: $setShortcut.value.trim() || cfg.shortcut,
       selection_search_enabled: $setSelectionEnabled.checked,
       selection_shortcut: $setSelectionShortcut.value.trim() || cfg.selection_shortcut || "Alt+Shift+Space",
